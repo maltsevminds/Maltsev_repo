@@ -1,24 +1,23 @@
-"""Strategy Testing Lab — local offline Streamlit UI for crypto strategy backtesting."""
+"""Лаборатория тестирования стратегий — локальный Streamlit UI для бэктестинга."""
 from __future__ import annotations
 
 import sys
 from pathlib import Path
 
-# Ensure repo root is on sys.path so backend modules are importable
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 import pandas as pd
 import streamlit as st
 
-# ─── PAGE CONFIG ──────────────────────────────────────────────────────────────
+# ─── КОНФИГУРАЦИЯ СТРАНИЦЫ ────────────────────────────────────────────────────
 st.set_page_config(
-    page_title="Strategy Testing Lab",
+    page_title="Лаборатория стратегий",
     page_icon="⚗️",
     layout="wide",
     initial_sidebar_state="expanded",
 )
 
-# ─── LAZY BACKEND IMPORTS (show friendly error if missing) ────────────────────
+# ─── ЗАГРУЗКА БЭКЕНДА ─────────────────────────────────────────────────────────
 @st.cache_resource(show_spinner=False)
 def _load_backend():
     from data.data_manager import DataManager
@@ -35,7 +34,7 @@ except Exception as _e:
     _backend_ok = False
     _backend_error = str(_e)
 
-# ─── SESSION STATE ────────────────────────────────────────────────────────────
+# ─── СОСТОЯНИЕ СЕССИИ ─────────────────────────────────────────────────────────
 _defaults: dict = {
     "df": None,
     "data_label": "",
@@ -56,270 +55,447 @@ def _log(msg: str) -> None:
     st.session_state.ui_logs = st.session_state.ui_logs[:80]
 
 
-# ─── HEADER ───────────────────────────────────────────────────────────────────
-st.title("⚗️  Strategy Testing Lab")
-st.markdown("*Local offline crypto strategy backtesting cockpit*")
+# ─── БОКОВАЯ ПАНЕЛЬ: ПОЛНАЯ ИНСТРУКЦИЯ ────────────────────────────────────────
+with st.sidebar:
+    st.markdown("# 📖 Инструкция")
+
+    with st.expander("⚡ Быстрый старт (2 минуты)", expanded=True):
+        st.markdown("""
+        **Шаг 1 — Выбрать стратегию** *(левая колонка)*
+        Выберите одну из 7 готовых стратегий.
+        При необходимости настройте параметры.
+
+        **Шаг 2 — Загрузить данные** *(левая колонка)*
+        - **Синтетические** — мгновенно, для первого теста
+        - **CSV-файл** — ваши реальные OHLCV данные
+        - **С биржи** — Binance или Bybit (без API ключа)
+
+        **Шаг 3 — Настроить параметры** *(центр)*
+        Укажите даты, начальный капитал, комиссию и проскальзывание.
+
+        **Шаг 4 — Запустить** *(центр)*
+        Нажмите **▶️ Запустить бэктест**.
+        Результаты появятся справа и внизу.
+        """)
+
+    with st.expander("📊 Расшифровка метрик"):
+        st.markdown("""
+        | Метрика | Хорошее значение |
+        |---------|-----------------|
+        | **Общая доходность** | > +20% |
+        | **Макс. просадка** | < -20% |
+        | **Коэф. Шарпа** | > 1.0 |
+        | **Коэф. Сортино** | > 1.0 |
+        | **Профит-фактор** | > 1.5 |
+        | **% выигрышных** | > 50% |
+
+        **Коэф. Шарпа** — доходность / риск (в год).
+        > 1.0 — хорошо, > 2.0 — отлично.
+
+        **Макс. просадка** — наибольшее падение портфеля
+        от пика до дна. Чем меньше по модулю — тем лучше.
+
+        **Профит-фактор** — сумма выигрышей / сумма убытков.
+        > 1.5 — прибыльная стратегия.
+
+        **Кривая капитала** — растущий тренд = стратегия
+        зарабатывает. Частые просадки = высокий риск.
+        """)
+
+    with st.expander("🎯 Описание стратегий"):
+        st.markdown("""
+        **Трендовые:**
+
+        🔵 **SMA Crossover** — покупка когда быстрая
+        скользящая пересекает медленную вверх.
+        Хорош на сильных трендах. Таймфрейм: 1h–1d.
+
+        🔵 **EMA Crossover** — то же, но EMA быстрее
+        реагирует на изменение цены.
+        Таймфрейм: 1h–4h.
+
+        **Возврат к среднему:**
+
+        🟢 **RSI Mean Reversion** — покупка при выходе
+        RSI из зоны перепроданности (< 30).
+        Хорош на флэте. Таймфрейм: 1h–1d.
+
+        **Моментум:**
+
+        🟡 **MACD Momentum** — пересечение линии MACD
+        и сигнальной линии. Много сигналов.
+        Таймфрейм: 15m–4h.
+
+        **Скальпинг (M15):**
+
+        🔴 **Bollinger Scalp** — отскок от нижней полосы
+        Боллинджера, выход у средней линии.
+
+        🔴 **Stochastic + EMA** — стохастик в зоне
+        перепроданности + фильтр по тренду EMA(50).
+
+        🔴 **VWAP Bounce** — отскок от нижней полосы
+        отклонения VWAP, выход при возврате к VWAP.
+        """)
+
+    with st.expander("📁 Формат CSV файла"):
+        st.markdown("""
+        Файл должен содержать колонки:
+        `timestamp, open, high, low, close, volume`
+
+        Допустимые форматы даты:
+        - `2023-01-01 00:00:00`
+        - `2023-01-01T00:00:00`
+        - `2023-01-01`
+
+        **Пример:**
+        ```
+        timestamp,open,high,low,close,volume
+        2023-01-01 00:00:00,16500,16550,16450,16490,45.2
+        2023-01-01 01:00:00,16490,16550,16480,16540,38.9
+        ```
+
+        Регистр колонок не важен (open = OPEN = Open).
+        """)
+
+    with st.expander("⚙️ Параметры бэктеста"):
+        st.markdown("""
+        **Начальный капитал** — сумма в USDT, с которой
+        начинается тест. Рекомендуется: 10 000.
+
+        **Комиссия (%)** — комиссия биржи за сделку.
+        Binance Spot: 0.1%. Bybit: 0.1%.
+
+        **Проскальзывание (%)** — разница между
+        теоретической и реальной ценой исполнения.
+        Рекомендуется: 0.05%.
+
+        **Диапазон дат** — бэктест выполняется только
+        на данных в указанном промежутке.
+        Данные вне диапазона игнорируются.
+
+        **Тип позиции:** только лонг (покупка).
+        Шорты в текущей версии не поддерживаются.
+        """)
+
+    with st.expander("🔧 Советы и ограничения"):
+        st.markdown("""
+        **Советы:**
+        - Для скальпинга (M15) берите 3000+ баров
+        - Проверяйте Sharpe и MDD, не только доходность
+        - Сравнивайте одну стратегию с разными параметрами
+        - Тестируйте на данных не менее 1 года
+
+        **Текущие ограничения:**
+        - ❌ Только длинные позиции (no short)
+        - ❌ Одна позиция одновременно
+        - ❌ Исполнение по цене закрытия свечи
+        - ❌ Равномерная комиссия без скидок
+
+        **Не реализовано (будущее):**
+        - 🔜 Живая торговля
+        - 🔜 Бумажная торговля
+        - 🔜 Оптимизация параметров
+        - 🔜 Запуск пользовательского кода
+        """)
+
+    st.divider()
+    st.markdown("**Версия:** MVP — Data + Backtest")
+    st.markdown("**Режим:** Локальный · Офлайн · Только исследования")
+
+
+# ─── ЗАГОЛОВОК ────────────────────────────────────────────────────────────────
+st.title("⚗️  Лаборатория тестирования стратегий")
+st.markdown("*Локальный офлайн инструмент для бэктестинга крипто-стратегий*")
 
 b1, b2, b3, b4, b5 = st.columns(5)
-b1.success("MVP — Data + Backtest")
-b2.info("Offline Mode")
-b3.info("Research Only")
-b4.warning("Live Trading Disabled")
-b5.warning("No API Keys")
+b1.success("MVP — Данные + Бэктест")
+b2.info("Офлайн режим")
+b3.info("Только исследования")
+b4.warning("Торговля отключена")
+b5.warning("Без API ключей")
 
-# ─── HELP INFO BOX ────────────────────────────────────────────────────────────
+# ─── ИНФОРМАЦИОННАЯ ПАНЕЛЬ ────────────────────────────────────────────────────
 st.info("""
-**📖 HOW TO USE:**
+**📖 КАК ПОЛЬЗОВАТЬСЯ:**
 
-1️⃣ **Select Strategy** (left) — Choose from SMA, EMA, RSI, MACD
-2️⃣ **Load Data** (left) — Sample data / CSV / Fetch from exchange
-3️⃣ **Configure** (center) — Set dates, capital, fees
-4️⃣ **Run Backtest** (center) — Click button, see results (right)
+1️⃣ **Выберите стратегию** *(левая колонка)* — выберите из 7 стратегий, настройте параметры
+2️⃣ **Загрузите данные** *(левая колонка)* — синтетика / CSV / биржа (без API ключа)
+3️⃣ **Настройте бэктест** *(центр)* — даты, капитал, комиссия, проскальзывание
+4️⃣ **Запустите** *(центр)* — нажмите **▶️ Запустить бэктест**, результаты появятся справа и внизу
 
-**📊 Metrics:** Sharpe > 1.0 ✓ | Win Rate > 50% ✓ | Profit Factor > 1.5 ✓
-**📚 Docs:** [USER_GUIDE.md](https://github.com/maltsevminds/Maltsev_repo/blob/main/USER_GUIDE.md)
+**📊 Хорошие значения:** Шарп > 1.0 ✓ | % выигрышных > 50% ✓ | Профит-фактор > 1.5 ✓
+**📚 Полная инструкция:** нажмите на **">"** слева для открытия боковой панели
 """)
 
-
 if not _backend_ok:
-    st.error(f"⚠️  Backend modules not loaded: {_backend_error}")
-    st.info("Run from repo root: `streamlit run dashboard/strategy_testing_lab.py`")
+    st.error(f"⚠️  Ошибка загрузки модулей: {_backend_error}")
+    st.info("Запускайте из корня репозитория: `python3 -m streamlit run dashboard/strategy_testing_lab.py`")
     st.stop()
 
 st.divider()
 
-# ─── THREE-COLUMN LAYOUT ──────────────────────────────────────────────────────
+# ─── ТРЁХКОЛОНОЧНЫЙ МАКЕТ ─────────────────────────────────────────────────────
 left_col, center_col, right_col = st.columns([1.2, 1.4, 1.1])
 
 # ══════════════════════════════════════════════════════════════════════════════
-# LEFT — Strategy Selection + Data Source
+# ЛЕВАЯ КОЛОНКА — Стратегия + Источник данных
 # ══════════════════════════════════════════════════════════════════════════════
 with left_col:
 
-    # ── Built-in Strategy Selector ────────────────────────────────────────────
-    st.subheader("🎯  Strategy")
+    # ── Выбор стратегии ───────────────────────────────────────────────────────
+    st.subheader("🎯  Стратегия")
 
-    strategy_label_to_key = {v: k for k, v in STRATEGY_LABELS.items()}
+    STRATEGY_LABELS_RU = {
+        "sma_cross":      "SMA Crossover (тренд)",
+        "ema_cross":      "EMA Crossover (тренд)",
+        "rsi":            "RSI Mean Reversion (возврат)",
+        "macd":           "MACD Momentum (моментум)",
+        "bollinger_scalp": "Bollinger Scalp — M15",
+        "stoch_ema_scalp": "Stochastic + EMA Scalp — M15",
+        "vwap_bounce":    "VWAP Bounce Scalp — M15",
+    }
+
+    strategy_label_to_key = {v: k for k, v in STRATEGY_LABELS_RU.items()}
     selected_label = st.selectbox(
-        "Select built-in strategy",
-        list(STRATEGY_LABELS.values()),
+        "Выберите стратегию",
+        list(STRATEGY_LABELS_RU.values()),
     )
     selected_key = strategy_label_to_key[selected_label]
 
-    st.caption(
-        {
-            "sma_cross": "Trend Following — SMA crossover (fast crosses slow).",
-            "ema_cross": "Trend Following — EMA crossover, reacts faster than SMA.",
-            "rsi": "Mean Reversion — enter on RSI oversold exit, close on overbought exit.",
-            "macd": "Momentum — MACD line / signal line crossover.",
-            "bollinger_scalp": "Scalp (M15) — buy lower-band bounce, exit at the middle band.",
-            "stoch_ema_scalp": "Scalp (M15) — Stochastic cross in oversold, filtered by EMA trend.",
-            "vwap_bounce": "Scalp (M15) — buy stretch below VWAP band, exit on return to VWAP.",
-        }[selected_key]
-    )
+    STRATEGY_CAPTIONS_RU = {
+        "sma_cross":      "Трендовая — покупка при пересечении быстрой MA вверх через медленную MA.",
+        "ema_cross":      "Трендовая — то же что SMA, но EMA быстрее реагирует на изменения цены.",
+        "rsi":            "Возврат к среднему — вход при выходе RSI из перепроданности (< 30).",
+        "macd":           "Моментум — пересечение линии MACD и сигнальной линии.",
+        "bollinger_scalp": "Скальп M15 — отскок от нижней полосы Боллинджера, выход у средней линии.",
+        "stoch_ema_scalp": "Скальп M15 — стохастик в зоне перепроданности, фильтр по тренду EMA(50).",
+        "vwap_bounce":    "Скальп M15 — отскок от нижней полосы VWAP, выход при возврате к VWAP.",
+    }
+    st.caption(STRATEGY_CAPTIONS_RU[selected_key])
 
-    # Dynamic parameter inputs per strategy
+    # Динамические параметры стратегии
     strategy_params: dict = {}
     if selected_key == "sma_cross":
         pc1, pc2 = st.columns(2)
-        strategy_params["fast"] = pc1.number_input("Fast MA", 3, 200, 20, step=1)
-        strategy_params["slow"] = pc2.number_input("Slow MA", 5, 500, 50, step=1)
+        strategy_params["fast"] = pc1.number_input("Быстрая MA", 3, 200, 20, step=1)
+        strategy_params["slow"] = pc2.number_input("Медленная MA", 5, 500, 50, step=1)
 
     elif selected_key == "ema_cross":
         pc1, pc2 = st.columns(2)
-        strategy_params["fast"] = pc1.number_input("Fast EMA", 3, 100, 12, step=1)
-        strategy_params["slow"] = pc2.number_input("Slow EMA", 5, 200, 26, step=1)
+        strategy_params["fast"] = pc1.number_input("Быстрая EMA", 3, 100, 12, step=1)
+        strategy_params["slow"] = pc2.number_input("Медленная EMA", 5, 200, 26, step=1)
 
     elif selected_key == "rsi":
         pc1, pc2, pc3 = st.columns(3)
-        strategy_params["period"] = pc1.number_input("Period", 5, 50, 14, step=1)
-        strategy_params["oversold"] = float(pc2.number_input("Oversold", 10, 45, 30, step=1))
-        strategy_params["overbought"] = float(pc3.number_input("Overbought", 55, 90, 70, step=1))
+        strategy_params["period"] = pc1.number_input("Период", 5, 50, 14, step=1)
+        strategy_params["oversold"] = float(pc2.number_input("Перепроданность", 10, 45, 30, step=1))
+        strategy_params["overbought"] = float(pc3.number_input("Перекупленность", 55, 90, 70, step=1))
 
     elif selected_key == "macd":
         pc1, pc2, pc3 = st.columns(3)
-        strategy_params["fast"] = pc1.number_input("Fast EMA", 5, 50, 12, step=1)
-        strategy_params["slow"] = pc2.number_input("Slow EMA", 10, 100, 26, step=1)
-        strategy_params["signal_period"] = pc3.number_input("Signal", 3, 20, 9, step=1)
+        strategy_params["fast"] = pc1.number_input("Быстрая EMA", 5, 50, 12, step=1)
+        strategy_params["slow"] = pc2.number_input("Медленная EMA", 10, 100, 26, step=1)
+        strategy_params["signal_period"] = pc3.number_input("Сигнальная", 3, 20, 9, step=1)
 
     elif selected_key == "bollinger_scalp":
         pc1, pc2 = st.columns(2)
-        strategy_params["period"] = pc1.number_input("BB Period", 5, 100, 20, step=1)
+        strategy_params["period"] = pc1.number_input("Период BB", 5, 100, 20, step=1)
         strategy_params["num_std"] = float(
-            pc2.number_input("Std Dev", 1.0, 4.0, 2.0, step=0.1, format="%.1f")
+            pc2.number_input("Кол-во σ", 1.0, 4.0, 2.0, step=0.1, format="%.1f")
         )
 
     elif selected_key == "stoch_ema_scalp":
         pc1, pc2, pc3 = st.columns(3)
-        strategy_params["k_period"] = pc1.number_input("%K Period", 5, 50, 14, step=1)
-        strategy_params["d_period"] = pc2.number_input("%D Period", 2, 20, 3, step=1)
-        strategy_params["trend_period"] = pc3.number_input("Trend EMA", 10, 200, 50, step=1)
+        strategy_params["k_period"] = pc1.number_input("Период %K", 5, 50, 14, step=1)
+        strategy_params["d_period"] = pc2.number_input("Период %D", 2, 20, 3, step=1)
+        strategy_params["trend_period"] = pc3.number_input("Тренд EMA", 10, 200, 50, step=1)
         pc4, pc5 = st.columns(2)
-        strategy_params["oversold"] = float(pc4.number_input("Oversold", 5, 45, 25, step=1))
-        strategy_params["overbought"] = float(pc5.number_input("Overbought", 55, 95, 75, step=1))
+        strategy_params["oversold"] = float(pc4.number_input("Перепроданность", 5, 45, 25, step=1))
+        strategy_params["overbought"] = float(pc5.number_input("Перекупленность", 55, 95, 75, step=1))
 
     elif selected_key == "vwap_bounce":
         pc1, pc2 = st.columns(2)
-        strategy_params["window"] = pc1.number_input("VWAP Window (bars)", 10, 200, 48, step=1)
+        strategy_params["window"] = pc1.number_input("Окно VWAP (баров)", 10, 200, 48, step=1)
         strategy_params["deviation"] = float(
-            pc2.number_input("Deviation %", 0.1, 5.0, 0.4, step=0.1, format="%.1f") / 100.0
+            pc2.number_input("Отклонение %", 0.1, 5.0, 0.4, step=0.1, format="%.1f") / 100.0
         )
 
     st.divider()
 
-    # ── Custom Strategy Sandbox (display only) ────────────────────────────────
-    with st.expander("📝  Custom Strategy Sandbox (display only)", expanded=False):
+    # ── Пользовательская стратегия (только просмотр) ──────────────────────────
+    with st.expander("📝  Загрузить свой код стратегии (только просмотр)", expanded=False):
         st.caption(
-            "Upload or paste your strategy code for reference. "
-            "Custom code is **not executed** in this version."
+            "Загрузите или вставьте код для справки. "
+            "Код **не выполняется** в текущей версии."
         )
-        uploaded_file = st.file_uploader("Upload .py file", type=["py"])
+        uploaded_file = st.file_uploader("Загрузить .py файл", type=["py"])
         if uploaded_file is not None:
             st.session_state.custom_code = uploaded_file.read().decode("utf-8")
-            _log(f"Strategy file uploaded: {uploaded_file.name}")
-            st.success(f"Loaded: {uploaded_file.name}")
+            _log(f"Файл стратегии загружен: {uploaded_file.name}")
+            st.success(f"Загружен: {uploaded_file.name}")
 
         st.text_area(
-            "Paste strategy code",
+            "Вставить код стратегии",
             height=160,
             label_visibility="collapsed",
-            placeholder="# Paste strategy code here for reference...\n# Not executed.",
+            placeholder="# Вставьте код стратегии для справки...\n# Код не выполняется.",
             key="custom_code",
         )
 
     st.divider()
 
-    # ── Data Source Panel ─────────────────────────────────────────────────────
-    st.subheader("📡  Data Source")
+    # ── Источник данных ───────────────────────────────────────────────────────
+    st.subheader("📡  Источник данных")
 
     data_mode = st.radio(
-        "Source",
-        ["Sample Data (synthetic)", "Upload CSV", "Fetch from Exchange"],
+        "Источник",
+        ["Синтетические данные", "Загрузить CSV", "Получить с биржи"],
         label_visibility="collapsed",
     )
 
     df_loaded: pd.DataFrame | None = None
 
-    if data_mode == "Sample Data (synthetic)":
-        n_bars = st.slider("Number of bars", 500, 5000, 2000, step=100)
-        sample_freq = st.selectbox("Timeframe", ["15m", "1m", "5m", "1h", "4h", "1d"], index=0)
-        if st.button("⚡  Generate Sample Data", use_container_width=True):
+    if data_mode == "Синтетические данные":
+        st.caption("Синтетические OHLCV данные BTC/USDT для быстрого тестирования.")
+        n_bars = st.slider("Количество баров", 500, 5000, 2000, step=100)
+        sample_freq = st.selectbox(
+            "Таймфрейм",
+            ["15m", "1m", "5m", "1h", "4h", "1d"],
+            index=0,
+        )
+        if st.button("⚡  Сгенерировать данные", use_container_width=True):
             df_loaded = generate_sample_ohlcv(
                 n_bars=n_bars, start="2023-01-01", freq=sample_freq
             )
             st.session_state.df = df_loaded
-            st.session_state.data_label = f"Sample BTC/USDT {sample_freq} — {n_bars} bars"
+            st.session_state.data_label = f"Синтетика BTC/USDT {sample_freq} — {n_bars} баров"
             st.session_state.backtest_results = None
-            _log(f"Sample data generated — {n_bars} bars  tf={sample_freq}")
+            _log(f"Синтетические данные: {n_bars} баров, таймфрейм {sample_freq}")
 
-    elif data_mode == "Upload CSV":
-        st.caption(
-            "CSV must have columns: timestamp, open, high, low, close, volume"
-        )
-        csv_file = st.file_uploader("Upload OHLCV CSV", type=["csv"])
+    elif data_mode == "Загрузить CSV":
+        st.caption("CSV должен содержать колонки: timestamp, open, high, low, close, volume")
+        csv_file = st.file_uploader("Загрузить OHLCV CSV", type=["csv"])
         if csv_file is not None:
             try:
                 dm = DataManager()
                 df_loaded = dm.load_from_csv(csv_file.read())
                 st.session_state.df = df_loaded
-                st.session_state.data_label = f"CSV: {csv_file.name}  ({len(df_loaded)} bars)"
+                st.session_state.data_label = f"CSV: {csv_file.name}  ({len(df_loaded)} баров)"
                 st.session_state.backtest_results = None
-                _log(f"CSV loaded: {csv_file.name}  bars={len(df_loaded)}")
-                st.success(f"Loaded {len(df_loaded):,} bars")
+                _log(f"CSV загружен: {csv_file.name}, баров: {len(df_loaded)}")
+                st.success(f"Загружено {len(df_loaded):,} баров")
             except Exception as exc:
-                st.error(f"CSV error: {exc}")
+                st.error(f"Ошибка CSV: {exc}")
 
-    else:  # Fetch from Exchange
-        exc_sel = st.selectbox("Exchange", ["binance", "bybit"])
-        sym_sel = st.text_input("Symbol", value="BTC/USDT")
-        tf_sel = st.selectbox("Timeframe", ["1m", "5m", "15m", "1h", "4h", "1d"], index=3)
-        limit_sel = st.slider("Bars to fetch", 100, 1000, 500)
-        st.info("📌 Public OHLCV only — no API key required")
-        if st.button("📥  Fetch OHLCV", use_container_width=True):
-            with st.spinner(f"Fetching from {exc_sel}…"):
+    else:  # Получить с биржи
+        exc_sel = st.selectbox("Биржа", ["binance", "bybit"])
+        sym_sel = st.text_input("Торговая пара", value="BTC/USDT")
+        tf_sel = st.selectbox("Таймфрейм", ["1m", "5m", "15m", "1h", "4h", "1d"], index=2)
+        limit_sel = st.slider("Количество баров", 100, 1000, 500)
+        st.info("📌 Только публичные OHLCV данные — API ключ не нужен")
+        if st.button("📥  Загрузить с биржи", use_container_width=True):
+            with st.spinner(f"Загрузка с {exc_sel}…"):
                 try:
                     dm = DataManager()
                     df_loaded = dm.load_from_exchange(exc_sel, sym_sel, tf_sel, limit=limit_sel)
                     st.session_state.df = df_loaded
                     st.session_state.data_label = (
-                        f"{exc_sel.title()} {sym_sel} {tf_sel} — {len(df_loaded)} bars"
+                        f"{exc_sel.title()} {sym_sel} {tf_sel} — {len(df_loaded)} баров"
                     )
                     st.session_state.backtest_results = None
-                    _log(f"Fetched {len(df_loaded)} bars from {exc_sel} {sym_sel} {tf_sel}")
-                    st.success(f"Fetched {len(df_loaded):,} bars")
+                    _log(f"Загружено {len(df_loaded)} баров: {exc_sel} {sym_sel} {tf_sel}")
+                    st.success(f"Загружено {len(df_loaded):,} баров")
                 except Exception as exc:
-                    st.error(f"Fetch error: {exc}")
+                    st.error(f"Ошибка загрузки: {exc}")
 
-    # Data status
+    # Статус данных
     if st.session_state.df is not None:
         _df = st.session_state.df
         st.success(
             f"✅  {st.session_state.data_label}\n\n"
-            f"Range: {_df.index[0].date()} → {_df.index[-1].date()}"
+            f"Период: {_df.index[0].date()} → {_df.index[-1].date()}"
         )
     else:
-        st.info("⏳  No data loaded — select a source above")
+        st.info("⏳  Данные не загружены — выберите источник выше")
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# CENTER — Backtest Config + Execution
+# ЦЕНТРАЛЬНАЯ КОЛОНКА — Настройка + Запуск
 # ══════════════════════════════════════════════════════════════════════════════
 with center_col:
 
-    st.subheader("⚙️  Backtest Configuration")
+    st.subheader("⚙️  Параметры бэктеста")
 
     dc1, dc2 = st.columns(2)
     with dc1:
-        start_date = st.date_input("Start Date", value=pd.Timestamp("2023-01-01"))
+        start_date = st.date_input("Дата начала", value=pd.Timestamp("2023-01-01"))
     with dc2:
-        end_date = st.date_input("End Date", value=pd.Timestamp("2024-01-01"))
+        end_date = st.date_input("Дата окончания", value=pd.Timestamp("2024-01-01"))
 
     cc1, cc2 = st.columns(2)
     with cc1:
-        initial_capital = st.number_input("Initial Capital (USDT)", 100, 10_000_000, 10_000, step=500)
+        initial_capital = st.number_input(
+            "Начальный капитал (USDT)", 100, 10_000_000, 10_000, step=500
+        )
     with cc2:
-        fee_pct = st.number_input("Fee (%)", 0.0, 5.0, 0.1, step=0.01, format="%.3f")
+        fee_pct = st.number_input(
+            "Комиссия (%)", 0.0, 5.0, 0.1, step=0.01, format="%.3f"
+        )
 
     sc1, sc2 = st.columns(2)
     with sc1:
-        slippage_pct = st.number_input("Slippage (%)", 0.0, 5.0, 0.05, step=0.01, format="%.3f")
+        slippage_pct = st.number_input(
+            "Проскальзывание (%)", 0.0, 5.0, 0.05, step=0.01, format="%.3f"
+        )
     with sc2:
-        st.number_input("Risk per Trade (%)", 0.1, 100.0, 1.0, step=0.1, format="%.1f")
+        st.number_input(
+            "Риск на сделку (%)", 0.1, 100.0, 1.0, step=0.1, format="%.1f"
+        )
 
-    st.selectbox("Position Sizing", ["Percent of Equity", "Fixed Size", "Risk-based"])
-    st.text_input("Commission Model", value="Taker/Maker flat fee", disabled=True)
-    st.text_input("Execution Assumptions", value="Market orders at candle close", disabled=True)
+    st.selectbox(
+        "Метод расчёта позиции",
+        ["% от капитала", "Фиксированный размер", "На основе риска"],
+    )
+    st.text_input("Модель комиссии", value="Taker/Maker фиксированная", disabled=True)
+    st.text_input(
+        "Исполнение ордеров", value="Маркет-ордер по цене закрытия свечи", disabled=True
+    )
 
     st.divider()
 
-    # ── Execution Buttons ─────────────────────────────────────────────────────
-    st.subheader("🚀  Execution")
+    # ── Кнопки управления ────────────────────────────────────────────────────
+    st.subheader("🚀  Запуск")
 
-    prepare_btn = st.button("📋  Prepare Command Preview", use_container_width=True)
+    prepare_btn = st.button("📋  Подготовить команду CLI", use_container_width=True)
 
     data_ready = st.session_state.df is not None
     run_btn = st.button(
-        "▶️  Run Backtest",
+        "▶️  Запустить бэктест",
         use_container_width=True,
         disabled=not data_ready,
         type="primary",
-        help="Load data first, then run." if not data_ready else "Click to run backtest",
+        help="Сначала загрузите данные" if not data_ready else "Нажмите для запуска бэктеста",
     )
 
-    st.button("📄  Paper Trading — Disabled", disabled=True, use_container_width=True)
+    st.button(
+        "📄  Бумажная торговля — отключена",
+        disabled=True,
+        use_container_width=True,
+    )
     st.markdown(
         """
         <div style="
             background:#2a0a0a;border:1px solid #7a0000;border-radius:6px;
             padding:10px 16px;text-align:center;color:#ff6666;font-weight:600;
         ">
-            🔒  Live Trading — LOCKED / DISABLED
+            🔒  Живая торговля — ЗАБЛОКИРОВАНА / ОТКЛЮЧЕНА
         </div>
         """,
         unsafe_allow_html=True,
     )
 
-    # ── Prepare Command ───────────────────────────────────────────────────────
+    # ── Генерация команды CLI ─────────────────────────────────────────────────
     if prepare_btn:
         fee_frac = fee_pct / 100.0
         slip_frac = slippage_pct / 100.0
@@ -327,7 +503,7 @@ with center_col:
             f"python -m backtesting.run_strategy \\\n"
             f"  --strategy {selected_key} \\\n"
             f"  --data-source local_csv \\\n"
-            f"  --csv data/historical/btc_usdt_1h.csv \\\n"
+            f"  --csv data/historical/btc_usdt.csv \\\n"
             f"  --start {start_date} \\\n"
             f"  --end {end_date} \\\n"
             f"  --capital {initial_capital} \\\n"
@@ -337,11 +513,11 @@ with center_col:
         for k, v in strategy_params.items():
             cmd += f" \\\n  --param {k}={v}"
         st.session_state.command_preview = cmd
-        _log("Command preview generated")
+        _log("Команда CLI сформирована")
 
-    # ── Run Backtest ──────────────────────────────────────────────────────────
+    # ── Запуск бэктеста ───────────────────────────────────────────────────────
     if run_btn and data_ready:
-        with st.spinner("Running backtest…"):
+        with st.spinner("Выполняется бэктест…"):
             try:
                 df_bt = st.session_state.df.copy()
                 df_bt = df_bt[
@@ -349,7 +525,7 @@ with center_col:
                     & (df_bt.index <= pd.Timestamp(end_date))
                 ]
                 if df_bt.empty:
-                    st.error("No data in selected date range.")
+                    st.error("Нет данных в выбранном диапазоне дат.")
                 else:
                     strategy = get_strategy(selected_key, strategy_params)
                     signals = strategy.generate_signals(df_bt)
@@ -373,18 +549,18 @@ with center_col:
                         "bars": len(df_bt),
                     }
                     _log(
-                        f"Backtest complete — {selected_label}  "
-                        f"trades={metrics['total_trades']}  "
-                        f"return={metrics['total_return']}%"
+                        f"Бэктест завершён — {selected_label}  "
+                        f"сделок: {metrics['total_trades']}  "
+                        f"доходность: {metrics['total_return']}%"
                     )
             except Exception as exc:
-                st.error(f"Backtest error: {exc}")
-                _log(f"Backtest error: {exc}")
+                st.error(f"Ошибка бэктеста: {exc}")
+                _log(f"Ошибка: {exc}")
 
-    # ── Terminal Preview ──────────────────────────────────────────────────────
+    # ── Предпросмотр команды CLI ──────────────────────────────────────────────
     st.divider()
-    st.subheader("💻  Terminal Preview")
-    st.caption("Text only — no subprocess is called")
+    st.subheader("💻  Команда CLI")
+    st.caption("Только предпросмотр — команда не выполняется")
 
     if st.session_state.command_preview:
         st.code(st.session_state.command_preview, language="bash")
@@ -396,8 +572,8 @@ with center_col:
                 padding:14px;font-family:monospace;font-size:12px;
                 color:#8b949e;line-height:1.7;
             ">
-                $ <span style="color:#3fb950">awaiting configuration…</span><br>
-                &gt; click <strong style="color:#e6edf3">📋 Prepare Command Preview</strong>
+                $ <span style="color:#3fb950">ожидание конфигурации…</span><br>
+                &gt; нажмите <strong style="color:#e6edf3">📋 Подготовить команду CLI</strong>
             </div>
             """,
             unsafe_allow_html=True,
@@ -405,43 +581,46 @@ with center_col:
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# RIGHT — Results + Logs
+# ПРАВАЯ КОЛОНКА — Результаты + Журнал
 # ══════════════════════════════════════════════════════════════════════════════
 with right_col:
 
-    st.subheader("📊  Results")
+    st.subheader("📊  Результаты")
 
     res = st.session_state.backtest_results
     if res:
         m = res["metrics"]
         st.caption(
-            f"{res['strategy_label']}  |  {res['bars']:,} bars  |  "
-            f"params: {res['strategy_params']}"
+            f"{res['strategy_label']}  |  {res['bars']:,} баров  |  "
+            f"параметры: {res['strategy_params']}"
         )
 
         METRIC_DEFS = [
-            ("Total Return", f"{m['total_return']:+.2f}%",
+            ("Общая доходность", f"{m['total_return']:+.2f}%",
              "green" if m["total_return"] >= 0 else "red"),
-            ("Max Drawdown", f"{m['max_drawdown']:.2f}%", "red"),
-            ("Sharpe Ratio", str(m["sharpe_ratio"]),
+            ("Макс. просадка", f"{m['max_drawdown']:.2f}%", "red"),
+            ("Коэф. Шарпа", str(m["sharpe_ratio"]),
              "green" if m["sharpe_ratio"] >= 1 else "orange"),
-            ("Sortino Ratio", str(m["sortino_ratio"]),
+            ("Коэф. Сортино", str(m["sortino_ratio"]),
              "green" if m["sortino_ratio"] >= 1 else "orange"),
-            ("Profit Factor", str(m["profit_factor"]),
-             "green" if str(m["profit_factor"]) == "∞" or float(str(m["profit_factor"]).replace("∞", "99")) >= 1.5 else "orange"),
-            ("Win Rate", f"{m['win_rate']:.1f}%",
+            ("Профит-фактор", str(m["profit_factor"]),
+             "green" if str(m["profit_factor"]) == "∞" or
+             float(str(m["profit_factor"]).replace("∞", "99")) >= 1.5 else "orange"),
+            ("% выигрышных", f"{m['win_rate']:.1f}%",
              "green" if m["win_rate"] >= 50 else "orange"),
-            ("Total Trades", str(m["total_trades"]), "default"),
-            ("Avg Trade Ret.", f"{m['avg_trade_return']:+.2f}%",
+            ("Всего сделок", str(m["total_trades"]), "default"),
+            ("Ср. доход/сделка", f"{m['avg_trade_return']:+.2f}%",
              "green" if m["avg_trade_return"] >= 0 else "red"),
-            ("Final Equity", f"${m['final_equity']:,.2f}", "default"),
+            ("Итог капитал", f"${m['final_equity']:,.2f}", "default"),
         ]
 
         for label, value, colour in METRIC_DEFS:
             mc, vc = st.columns([1.5, 1])
             mc.markdown(f"<small><b>{label}</b></small>", unsafe_allow_html=True)
-            colour_map = {"green": "#4caf50", "red": "#f44336",
-                          "orange": "#ff9800", "default": "#aaaaaa"}
+            colour_map = {
+                "green": "#4caf50", "red": "#f44336",
+                "orange": "#ff9800", "default": "#aaaaaa",
+            }
             hex_c = colour_map.get(colour, "#aaaaaa")
             vc.markdown(
                 f"<span style='font-family:monospace;color:{hex_c};font-size:13px;'>"
@@ -449,25 +628,25 @@ with right_col:
                 unsafe_allow_html=True,
             )
     else:
-        PENDING_METRICS = [
-            "Total Return", "Max Drawdown", "Sharpe Ratio", "Sortino Ratio",
-            "Profit Factor", "Win Rate", "Total Trades", "Avg Trade Return",
+        PENDING_METRICS_RU = [
+            "Общая доходность", "Макс. просадка", "Коэф. Шарпа", "Коэф. Сортино",
+            "Профит-фактор", "% выигрышных", "Всего сделок", "Ср. доход/сделка",
         ]
-        for label in PENDING_METRICS:
+        for label in PENDING_METRICS_RU:
             mc, vc = st.columns([1.5, 1])
             mc.markdown(f"<small><b>{label}</b></small>", unsafe_allow_html=True)
             vc.markdown(
-                "<code style='color:#444;font-size:11px;'>Pending</code>",
+                "<code style='color:#444;font-size:11px;'>—</code>",
                 unsafe_allow_html=True,
             )
 
     st.divider()
 
-    # ── UI Logs ───────────────────────────────────────────────────────────────
-    st.subheader("📋  UI Logs")
-    st.caption("Session logs only — no exchange or API logs")
+    # ── Журнал действий ───────────────────────────────────────────────────────
+    st.subheader("📋  Журнал")
+    st.caption("Локальные логи сессии — без данных биржи и API")
 
-    if st.button("🗑  Clear Logs", use_container_width=True):
+    if st.button("🗑  Очистить журнал", use_container_width=True):
         st.session_state.ui_logs = []
         st.rerun()
 
@@ -481,13 +660,13 @@ with right_col:
         )
     else:
         st.markdown(
-            "<small style='color:#555;'>No logs yet.</small>",
+            "<small style='color:#555;'>Журнал пуст.</small>",
             unsafe_allow_html=True,
         )
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# FULL-WIDTH RESULTS (shown only after a successful backtest)
+# ПОЛНАЯ ШИРИНА — Кривая капитала и журнал сделок (после бэктеста)
 # ══════════════════════════════════════════════════════════════════════════════
 if st.session_state.backtest_results:
     res = st.session_state.backtest_results
@@ -495,7 +674,7 @@ if st.session_state.backtest_results:
     trades = res["trades"]
 
     st.divider()
-    st.subheader("📈  Equity Curve")
+    st.subheader("📈  Кривая капитала")
 
     try:
         import plotly.graph_objects as go
@@ -506,43 +685,43 @@ if st.session_state.backtest_results:
                 x=equity_curve.index,
                 y=equity_curve["equity"],
                 mode="lines",
-                name="Equity",
+                name="Капитал",
                 line=dict(color="#00e676", width=1.5),
                 fill="tozeroy",
                 fillcolor="rgba(0,230,118,0.06)",
             )
         )
         fig.add_hline(
-            y=res["metrics"]["final_equity"] * 0 + float(equity_curve["equity"].iloc[0]),
+            y=float(equity_curve["equity"].iloc[0]),
             line_dash="dot",
             line_color="#555",
-            annotation_text="Initial Capital",
+            annotation_text="Начальный капитал",
         )
         fig.update_layout(
             template="plotly_dark",
             height=320,
             margin=dict(l=0, r=0, t=10, b=0),
             xaxis_title=None,
-            yaxis_title="Portfolio (USDT)",
+            yaxis_title="Портфель (USDT)",
             showlegend=False,
         )
         st.plotly_chart(fig, use_container_width=True)
     except ImportError:
         st.line_chart(equity_curve["equity"])
 
-    # ── Trade Log ─────────────────────────────────────────────────────────────
+    # ── Журнал сделок ─────────────────────────────────────────────────────────
     if trades:
-        with st.expander(f"📄  Trade Log  ({len(trades)} trades)", expanded=False):
+        with st.expander(f"📄  Журнал сделок  ({len(trades)} сделок)", expanded=False):
             trade_rows = []
             for t in trades:
                 trade_rows.append(
                     {
-                        "Entry Time": str(t.entry_ts)[:16],
-                        "Exit Time": str(t.exit_ts)[:16] if t.exit_ts else "Open",
-                        "Entry Price": f"{t.entry_price:,.2f}",
-                        "Exit Price": f"{t.exit_price:,.2f}" if t.exit_price else "—",
+                        "Вход (время)": str(t.entry_ts)[:16],
+                        "Выход (время)": str(t.exit_ts)[:16] if t.exit_ts else "Открыта",
+                        "Цена входа": f"{t.entry_price:,.2f}",
+                        "Цена выхода": f"{t.exit_price:,.2f}" if t.exit_price else "—",
                         "PnL (USDT)": f"{t.pnl:+.2f}",
-                        "Return (%)": f"{t.pnl_pct:+.2f}%",
+                        "Доходность (%)": f"{t.pnl_pct:+.2f}%",
                     }
                 )
             st.dataframe(
@@ -552,36 +731,36 @@ if st.session_state.backtest_results:
             )
 
 
-# ─── SAFETY BANNER ────────────────────────────────────────────────────────────
+# ─── БАННЕР БЕЗОПАСНОСТИ ──────────────────────────────────────────────────────
 st.divider()
-st.subheader("🛡️  Safety / Mode Status")
+st.subheader("🛡️  Режим работы")
 
 sm_col, ss_col, sf_col = st.columns(3)
 with sm_col:
     st.markdown(
-        "**Current Mode**\n"
-        "- Offline UI shell\n"
-        "- ✅ Backtest engine: **active**\n"
-        "- 🔒 API execution: **disabled**\n"
-        "- 🔒 Live trading: **disabled**"
+        "**Текущий режим**\n"
+        "- Локальный офлайн интерфейс\n"
+        "- ✅ Движок бэктеста: **активен**\n"
+        "- 🔒 API запросы: **отключены**\n"
+        "- 🔒 Живая торговля: **отключена**"
     )
 with ss_col:
     st.markdown(
-        "**Available now**\n"
-        "- ✅ Generate synthetic data\n"
-        "- ✅ Upload CSV data\n"
-        "- ✅ Fetch public OHLCV (ccxt)\n"
-        "- ✅ Run built-in strategy backtests\n"
-        "- ✅ View equity curve + trade log\n"
-        "- ✅ Prepare CLI command preview"
+        "**Доступно сейчас**\n"
+        "- ✅ Синтетические данные\n"
+        "- ✅ Загрузка CSV\n"
+        "- ✅ Публичные OHLCV с биржи\n"
+        "- ✅ Бэктест 7 стратегий\n"
+        "- ✅ Кривая капитала + сделки\n"
+        "- ✅ Предпросмотр команды CLI"
     )
 with sf_col:
     st.markdown(
-        "**Future only (not implemented)**\n"
-        "- 🔜 Custom strategy execution\n"
-        "- 🔜 Multi-strategy comparison\n"
-        "- 🔜 Parameter optimisation\n"
-        "- 🔜 Paper trading\n"
-        "- 🔜 Live trading\n"
-        "- 🔜 AI strategy evaluation"
+        "**В будущих версиях**\n"
+        "- 🔜 Запуск своего кода стратегии\n"
+        "- 🔜 Сравнение стратегий\n"
+        "- 🔜 Оптимизация параметров\n"
+        "- 🔜 Бумажная торговля\n"
+        "- 🔜 Живая торговля\n"
+        "- 🔜 AI оценка стратегий"
     )
