@@ -7,6 +7,8 @@ from strategies.macd_strategy import MACDStrategy
 from strategies.bollinger_scalp import BollingerScalpStrategy
 from strategies.stoch_ema_scalp import StochEMAScalpStrategy
 from strategies.vwap_bounce import VWAPBounceStrategy
+from strategies.turtle_soup import TurtleSoupStrategy
+from strategies.raschke_80_20 import Raschke8020Strategy
 from strategies.base import BaseStrategy
 
 STRATEGY_REGISTRY: dict[str, type[BaseStrategy]] = {
@@ -17,6 +19,8 @@ STRATEGY_REGISTRY: dict[str, type[BaseStrategy]] = {
     "bollinger_scalp": BollingerScalpStrategy,
     "stoch_ema_scalp": StochEMAScalpStrategy,
     "vwap_bounce": VWAPBounceStrategy,
+    "turtle_soup": TurtleSoupStrategy,
+    "raschke_80_20": Raschke8020Strategy,
 }
 
 STRATEGY_LABELS: dict[str, str] = {
@@ -27,6 +31,8 @@ STRATEGY_LABELS: dict[str, str] = {
     "bollinger_scalp": "Bollinger Scalp (M15)",
     "stoch_ema_scalp": "Stochastic + EMA Scalp (M15)",
     "vwap_bounce": "VWAP Bounce Scalp (M15)",
+    "turtle_soup": "Turtle Soup",
+    "raschke_80_20": "80-20 по Рашке",
 }
 
 

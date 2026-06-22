@@ -55,6 +55,20 @@ def _log(msg: str) -> None:
     st.session_state.ui_logs = st.session_state.ui_logs[:80]
 
 
+# ─── ТОП-50 ТОРГОВЫХ ПАР ──────────────────────────────────────────────────────
+TOP_50_PAIRS = [
+    "BTC/USDT", "ETH/USDT", "BNB/USDT", "SOL/USDT", "XRP/USDT",
+    "ADA/USDT", "AVAX/USDT", "DOGE/USDT", "TON/USDT", "DOT/USDT",
+    "MATIC/USDT", "LINK/USDT", "SHIB/USDT", "LTC/USDT", "UNI/USDT",
+    "BCH/USDT", "XLM/USDT", "ATOM/USDT", "ETC/USDT", "NEAR/USDT",
+    "APT/USDT", "ICP/USDT", "FIL/USDT", "HBAR/USDT", "ARB/USDT",
+    "VET/USDT", "OP/USDT", "MKR/USDT", "ALGO/USDT", "GRT/USDT",
+    "AAVE/USDT", "STX/USDT", "EOS/USDT", "THETA/USDT", "SAND/USDT",
+    "MANA/USDT", "AXS/USDT", "FTM/USDT", "RUNE/USDT", "CAKE/USDT",
+    "LDO/USDT", "CRV/USDT", "DYDX/USDT", "SNX/USDT", "1INCH/USDT",
+    "COMP/USDT", "ZEC/USDT", "DASH/USDT", "XMR/USDT", "CHZ/USDT",
+]
+
 # ─── БОКОВАЯ ПАНЕЛЬ: ПОЛНАЯ ИНСТРУКЦИЯ ────────────────────────────────────────
 with st.sidebar:
     st.markdown("# 📖 Инструкция")
@@ -62,7 +76,7 @@ with st.sidebar:
     with st.expander("⚡ Быстрый старт (2 минуты)", expanded=True):
         st.markdown("""
         **Шаг 1 — Выбрать стратегию** *(левая колонка)*
-        Выберите одну из 7 готовых стратегий.
+        Выберите одну из 9 готовых стратегий.
         При необходимости настройте параметры.
 
         **Шаг 2 — Загрузить данные** *(левая колонка)*
@@ -136,6 +150,16 @@ with st.sidebar:
 
         🔴 **VWAP Bounce** — отскок от нижней полосы
         отклонения VWAP, выход при возврате к VWAP.
+
+        **Контртренд / Разворот:**
+
+        🟣 **Turtle Soup** (Raschke/Connors) — ловля
+        ложных пробоев N-барового минимума. Цена пробивает
+        уровень и тут же разворачивается — входим на возврат.
+
+        🟣 **80-20 по Рашке** (Linda Raschke) — вход
+        после бара-разворота: открытие в нижних 20%
+        диапазона, закрытие в верхних 20% (бычий разворот).
         """)
 
     with st.expander("📁 Формат CSV файла"):
@@ -219,7 +243,7 @@ b5.warning("Без API ключей")
 st.info("""
 **📖 КАК ПОЛЬЗОВАТЬСЯ:**
 
-1️⃣ **Выберите стратегию** *(левая колонка)* — выберите из 7 стратегий, настройте параметры
+1️⃣ **Выберите стратегию** *(левая колонка)* — выберите из 9 стратегий, настройте параметры
 2️⃣ **Загрузите данные** *(левая колонка)* — синтетика / CSV / биржа (без API ключа)
 3️⃣ **Настройте бэктест** *(центр)* — даты, капитал, комиссия, проскальзывание
 4️⃣ **Запустите** *(центр)* — нажмите **▶️ Запустить бэктест**, результаты появятся справа и внизу
@@ -254,6 +278,8 @@ with left_col:
         "bollinger_scalp": "Bollinger Scalp — M15",
         "stoch_ema_scalp": "Stochastic + EMA Scalp — M15",
         "vwap_bounce":    "VWAP Bounce Scalp — M15",
+        "turtle_soup":    "Turtle Soup (контртренд)",
+        "raschke_80_20":  "80-20 по Рашке (разворот)",
     }
 
     strategy_label_to_key = {v: k for k, v in STRATEGY_LABELS_RU.items()}
@@ -271,6 +297,8 @@ with left_col:
         "bollinger_scalp": "Скальп M15 — отскок от нижней полосы Боллинджера, выход у средней линии.",
         "stoch_ema_scalp": "Скальп M15 — стохастик в зоне перепроданности, фильтр по тренду EMA(50).",
         "vwap_bounce":    "Скальп M15 — отскок от нижней полосы VWAP, выход при возврате к VWAP.",
+        "turtle_soup":    "Контртренд (Raschke/Connors) — ловля ложного пробоя N-барового минимума.",
+        "raschke_80_20":  "Разворот (Linda Raschke) — вход после бара с открытием внизу и закрытием вверху диапазона.",
     }
     st.caption(STRATEGY_CAPTIONS_RU[selected_key])
 
@@ -319,6 +347,30 @@ with left_col:
         strategy_params["window"] = pc1.number_input("Окно VWAP (баров)", 10, 200, 48, step=1)
         strategy_params["deviation"] = float(
             pc2.number_input("Отклонение %", 0.1, 5.0, 0.4, step=0.1, format="%.1f") / 100.0
+        )
+
+    elif selected_key == "turtle_soup":
+        pc1, pc2 = st.columns(2)
+        strategy_params["n_bars"] = pc1.number_input(
+            "Период минимума (баров)", 5, 100, 20, step=1,
+            help="Количество баров для вычисления N-барового минимума. Классика: 20.",
+        )
+        strategy_params["exit_ema"] = pc2.number_input(
+            "Выход EMA (баров)", 2, 50, 5, step=1,
+            help="Период быстрой EMA для выхода. Если цена падает ниже — выход.",
+        )
+
+    elif selected_key == "raschke_80_20":
+        pc1, pc2 = st.columns(2)
+        strategy_params["threshold"] = float(
+            pc1.number_input(
+                "Порог 80-20 (%)", 5, 40, 20, step=1,
+                help="Доля диапазона свечи (%). Вход: открытие в нижних X%, закрытие в верхних X%.",
+            ) / 100.0
+        )
+        strategy_params["exit_ema"] = pc2.number_input(
+            "Выход EMA (баров)", 2, 50, 5, step=1,
+            help="Период быстрой EMA для выхода из позиции.",
         )
 
     st.divider()
@@ -390,7 +442,12 @@ with left_col:
 
     else:  # Получить с биржи
         exc_sel = st.selectbox("Биржа", ["binance", "bybit"])
-        sym_sel = st.text_input("Торговая пара", value="BTC/USDT")
+        sym_sel = st.selectbox(
+            "Торговая пара",
+            TOP_50_PAIRS,
+            index=0,
+            help="Топ-50 торговых пар по капитализации (USDT)",
+        )
         tf_sel = st.selectbox("Таймфрейм", ["1m", "5m", "15m", "1h", "4h", "1d"], index=2)
         limit_sel = st.slider("Количество баров", 100, 1000, 500)
         st.info("📌 Только публичные OHLCV данные — API ключ не нужен")
@@ -429,9 +486,14 @@ with center_col:
 
     dc1, dc2 = st.columns(2)
     with dc1:
-        start_date = st.date_input("Дата начала", value=pd.Timestamp("2023-01-01"))
+        start_date = st.date_input("Дата начала", value=pd.Timestamp("2026-01-01"))
     with dc2:
-        end_date = st.date_input("Дата окончания", value=pd.Timestamp("2024-01-01"))
+        end_date = st.date_input("Дата окончания", value=pd.Timestamp("2026-06-22"))
+
+    # Валидация дат
+    _dates_ok = end_date >= start_date
+    if not _dates_ok:
+        st.error("⚠️  Дата окончания не может быть раньше даты начала.")
 
     cc1, cc2 = st.columns(2)
     with cc1:
@@ -470,12 +532,17 @@ with center_col:
     prepare_btn = st.button("📋  Подготовить команду CLI", use_container_width=True)
 
     data_ready = st.session_state.df is not None
+    _run_disabled = not data_ready or not _dates_ok
     run_btn = st.button(
         "▶️  Запустить бэктест",
         use_container_width=True,
-        disabled=not data_ready,
+        disabled=_run_disabled,
         type="primary",
-        help="Сначала загрузите данные" if not data_ready else "Нажмите для запуска бэктеста",
+        help=(
+            "Сначала загрузите данные" if not data_ready
+            else "Исправьте диапазон дат" if not _dates_ok
+            else "Нажмите для запуска бэктеста"
+        ),
     )
 
     st.button(
@@ -516,7 +583,7 @@ with center_col:
         _log("Команда CLI сформирована")
 
     # ── Запуск бэктеста ───────────────────────────────────────────────────────
-    if run_btn and data_ready:
+    if run_btn and data_ready and _dates_ok:
         with st.spinner("Выполняется бэктест…"):
             try:
                 df_bt = st.session_state.df.copy()
@@ -731,36 +798,35 @@ if st.session_state.backtest_results:
             )
 
 
-# ─── БАННЕР БЕЗОПАСНОСТИ ──────────────────────────────────────────────────────
+# ─── РЕЖИМ РАБОТЫ (спойлер) ───────────────────────────────────────────────────
 st.divider()
-st.subheader("🛡️  Режим работы")
-
-sm_col, ss_col, sf_col = st.columns(3)
-with sm_col:
-    st.markdown(
-        "**Текущий режим**\n"
-        "- Локальный офлайн интерфейс\n"
-        "- ✅ Движок бэктеста: **активен**\n"
-        "- 🔒 API запросы: **отключены**\n"
-        "- 🔒 Живая торговля: **отключена**"
-    )
-with ss_col:
-    st.markdown(
-        "**Доступно сейчас**\n"
-        "- ✅ Синтетические данные\n"
-        "- ✅ Загрузка CSV\n"
-        "- ✅ Публичные OHLCV с биржи\n"
-        "- ✅ Бэктест 7 стратегий\n"
-        "- ✅ Кривая капитала + сделки\n"
-        "- ✅ Предпросмотр команды CLI"
-    )
-with sf_col:
-    st.markdown(
-        "**В будущих версиях**\n"
-        "- 🔜 Запуск своего кода стратегии\n"
-        "- 🔜 Сравнение стратегий\n"
-        "- 🔜 Оптимизация параметров\n"
-        "- 🔜 Бумажная торговля\n"
-        "- 🔜 Живая торговля\n"
-        "- 🔜 AI оценка стратегий"
-    )
+with st.expander("🛡️  Режим работы", expanded=False):
+    sm_col, ss_col, sf_col = st.columns(3)
+    with sm_col:
+        st.markdown(
+            "**Текущий режим**\n"
+            "- Локальный офлайн интерфейс\n"
+            "- ✅ Движок бэктеста: **активен**\n"
+            "- 🔒 API запросы: **отключены**\n"
+            "- 🔒 Живая торговля: **отключена**"
+        )
+    with ss_col:
+        st.markdown(
+            "**Доступно сейчас**\n"
+            "- ✅ Синтетические данные\n"
+            "- ✅ Загрузка CSV\n"
+            "- ✅ Публичные OHLCV с биржи\n"
+            "- ✅ Бэктест 9 стратегий\n"
+            "- ✅ Кривая капитала + сделки\n"
+            "- ✅ Предпросмотр команды CLI"
+        )
+    with sf_col:
+        st.markdown(
+            "**В будущих версиях**\n"
+            "- 🔜 Запуск своего кода стратегии\n"
+            "- 🔜 Сравнение стратегий\n"
+            "- 🔜 Оптимизация параметров\n"
+            "- 🔜 Бумажная торговля\n"
+            "- 🔜 Живая торговля\n"
+            "- 🔜 AI оценка стратегий"
+        )
