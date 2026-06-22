@@ -515,6 +515,25 @@ with center_col:
             "Риск на сделку (%)", 0.1, 100.0, 1.0, step=0.1, format="%.1f"
         )
 
+    st.markdown("**Выход из сделки**")
+    ex1, ex2 = st.columns(2)
+    with ex1:
+        stop_loss_pct = st.number_input(
+            "Стоп-лосс (%)",
+            min_value=0.0, max_value=50.0, value=0.0, step=0.1, format="%.1f",
+            help="Выход если цена упала на X% от входа. 0 = отключено.",
+        )
+    with ex2:
+        take_profit_pct = st.number_input(
+            "Тейк-профит (%)",
+            min_value=0.0, max_value=100.0, value=0.0, step=0.1, format="%.1f",
+            help="Выход если цена выросла на X% от входа. 0 = отключено.",
+        )
+    if stop_loss_pct > 0 or take_profit_pct > 0:
+        sl_str = f"SL {stop_loss_pct:.1f}%" if stop_loss_pct > 0 else "SL выкл."
+        tp_str = f"TP {take_profit_pct:.1f}%" if take_profit_pct > 0 else "TP выкл."
+        st.caption(f"🎯 {sl_str}  |  {tp_str}  — проверяются по High/Low свечи")
+
     st.selectbox(
         "Метод расчёта позиции",
         ["% от капитала", "Фиксированный размер", "На основе риска"],
@@ -603,6 +622,8 @@ with center_col:
                         initial_capital=float(initial_capital),
                         fee=fee_pct / 100.0,
                         slippage=slippage_pct / 100.0,
+                        stop_loss=stop_loss_pct / 100.0,
+                        take_profit=take_profit_pct / 100.0,
                     )
 
                     metrics = calculate_metrics(equity_curve, trades, float(initial_capital))
@@ -779,6 +800,13 @@ if st.session_state.backtest_results:
     # ── Журнал сделок ─────────────────────────────────────────────────────────
     if trades:
         with st.expander(f"📄  Журнал сделок  ({len(trades)} сделок)", expanded=False):
+            _reason_labels = {
+                "signal":      "📊 Сигнал",
+                "stop_loss":   "🛑 Стоп-лосс",
+                "take_profit": "✅ Тейк-профит",
+                "end_of_data": "⏹ Конец данных",
+                "":            "—",
+            }
             trade_rows = []
             for t in trades:
                 trade_rows.append(
@@ -789,6 +817,7 @@ if st.session_state.backtest_results:
                         "Цена выхода": f"{t.exit_price:,.2f}" if t.exit_price else "—",
                         "PnL (USDT)": f"{t.pnl:+.2f}",
                         "Доходность (%)": f"{t.pnl_pct:+.2f}%",
+                        "Причина выхода": _reason_labels.get(t.exit_reason, t.exit_reason),
                     }
                 )
             st.dataframe(
