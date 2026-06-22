@@ -1,6 +1,7 @@
 """Лаборатория тестирования стратегий — локальный Streamlit UI для бэктестинга."""
 from __future__ import annotations
 
+import inspect
 import sys
 from pathlib import Path
 
@@ -42,6 +43,14 @@ _defaults: dict = {
     "ui_logs": [],
     "command_preview": "",
     "custom_code": "",
+    "custom_strategy_cls": None,       # загруженный класс стратегии
+    "custom_strategy_params": {},      # параметры по умолчанию из __init__
+    "custom_strategy_name": "",        # имя класса
+    "api_keys": {
+        "binance": {"key": "", "secret": ""},
+        "bybit":   {"key": "", "secret": ""},
+    },
+    "api_status": {},                  # {"binance": {"ok": bool, "message": str}}
 }
 for _k, _v in _defaults.items():
     if _k not in st.session_state:
@@ -53,6 +62,51 @@ def _log(msg: str) -> None:
     ts = datetime.now().strftime("%H:%M:%S")
     st.session_state.ui_logs.insert(0, f"[{ts}]  {msg}")
     st.session_state.ui_logs = st.session_state.ui_logs[:80]
+
+
+# ─── ЗАГРУЗКА КАСТОМНОЙ СТРАТЕГИИ ─────────────────────────────────────────────
+def _load_custom_strategy(code: str):
+    """
+    Exec user code, find first BaseStrategy subclass, return (cls, default_params).
+    Raises ValueError with a user-friendly message on failure.
+    """
+    from strategies.base import BaseStrategy
+    import numpy as np
+
+    namespace: dict = {
+        "__builtins__": __builtins__,
+        "BaseStrategy": BaseStrategy,
+        "pd": pd,
+        "np": np,
+    }
+    try:
+        exec(compile(code, "<custom_strategy>", "exec"), namespace)
+    except SyntaxError as exc:
+        raise ValueError(f"Синтаксическая ошибка: {exc}")
+    except Exception as exc:
+        raise ValueError(f"Ошибка при загрузке кода: {exc}")
+
+    from strategies.base import BaseStrategy as _Base
+    found = [
+        v for v in namespace.values()
+        if isinstance(v, type) and issubclass(v, _Base) and v is not _Base
+    ]
+    if not found:
+        raise ValueError(
+            "Класс, наследующий BaseStrategy, не найден. "
+            "Убедитесь, что ваш класс содержит: class MyStrategy(BaseStrategy): ..."
+        )
+
+    cls = found[0]
+    # Determine default params from __init__ signature
+    sig = inspect.signature(cls.__init__)
+    params: dict = {}
+    for name, param in sig.parameters.items():
+        if name == "self":
+            continue
+        if param.default is not inspect.Parameter.empty:
+            params[name] = param.default
+    return cls, params
 
 
 # ─── ТОП-50 ТОРГОВЫХ ПАР ──────────────────────────────────────────────────────
@@ -69,12 +123,12 @@ TOP_50_PAIRS = [
     "COMP/USDT", "ZEC/USDT", "DASH/USDT", "XMR/USDT", "CHZ/USDT",
 ]
 
-# ─── ВСПОМОГАТЕЛЬНАЯ ФУНКЦИЯ: расчёт баров из диапазона ─────────────────────
+# ─── ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ ──────────────────────────────────────────────────
 _TF_SECONDS: dict[str, int] = {
     "1m": 60, "5m": 300, "15m": 900, "30m": 1800,
     "1h": 3600, "4h": 14400, "1d": 86400,
 }
-_MAX_EXCHANGE_BARS = 1500  # ccxt Binance/Bybit limit per request
+_MAX_EXCHANGE_BARS = 1500
 
 
 def _calc_bars(start: pd.Timestamp, end: pd.Timestamp, freq: str) -> int:
@@ -83,29 +137,24 @@ def _calc_bars(start: pd.Timestamp, end: pd.Timestamp, freq: str) -> int:
     return max(100, int(seconds / bar_sec) + 1)
 
 
+def _get_api(exchange_id: str) -> tuple[str | None, str | None]:
+    keys = st.session_state.api_keys.get(exchange_id, {})
+    k = keys.get("key", "").strip() or None
+    s = keys.get("secret", "").strip() or None
+    return k, s
+
+
 # ─── БОКОВАЯ ПАНЕЛЬ: ПОЛНАЯ ИНСТРУКЦИЯ ────────────────────────────────────────
 with st.sidebar:
     st.markdown("# 📖 Инструкция")
 
-    with st.expander("⚡ Быстрый старт (2 минуты)", expanded=True):
+    with st.expander("⚡ Быстрый старт", expanded=True):
         st.markdown("""
-        **Шаг 1 — Выбрать период и таймфрейм** *(вверху)*
-        Укажите даты и частоту свечей — количество баров
-        рассчитывается автоматически.
-
-        **Шаг 2 — Выбрать стратегию** *(левая колонка)*
-        Выберите одну из 9 стратегий. Настройте параметры.
-
-        **Шаг 3 — Загрузить данные** *(левая колонка)*
-        - **Синтетические** — мгновенно, для первого теста
-        - **CSV-файл** — ваши реальные OHLCV данные
-        - **С биржи** — Binance или Bybit (без API ключа)
-
-        **Шаг 4 — Настроить выходы** *(центр)*
-        Комиссия, капитал, SL/TP/Trailing Stop.
-
-        **Шаг 5 — Запустить** *(центр)*
-        Нажмите **▶️ Запустить бэктест**.
+        1. **Период и таймфрейм** *(вверху)* — бары считаются автоматически
+        2. **Стратегия** *(левая колонка)* — 9 готовых или своя
+        3. **Данные** *(левая колонка)* — синтетика / CSV / биржа
+        4. **Параметры и выходы** *(центр)* — капитал, SL/TP/Trail
+        5. **Запуск** *(центр)* — нажать ▶️ Запустить бэктест
         """)
 
     with st.expander("📊 Расшифровка метрик"):
@@ -115,84 +164,68 @@ with st.sidebar:
         | **Общая доходность** | > +20% |
         | **Макс. просадка** | < -20% |
         | **Коэф. Шарпа** | > 1.0 |
-        | **Коэф. Сортино** | > 1.0 |
         | **Профит-фактор** | > 1.5 |
         | **% выигрышных** | > 50% |
-
-        **Коэф. Шарпа** — доходность / риск (в год).
-        > 1.0 — хорошо, > 2.0 — отлично.
-
-        **Макс. просадка** — наибольшее падение портфеля
-        от пика до дна. Чем меньше по модулю — тем лучше.
-
-        **Профит-фактор** — сумма выигрышей / сумма убытков.
-        > 1.5 — прибыльная стратегия.
         """)
 
-    with st.expander("🎯 Описание стратегий"):
+    with st.expander("🎯 Стратегии"):
         st.markdown("""
-        **Трендовые:**
-        🔵 **SMA / EMA Crossover** — пересечение скользящих.
+        🔵 **SMA / EMA Crossover** — пересечение скользящих\n
+        🟢 **RSI** — возврат из перепроданности\n
+        🟡 **MACD** — пересечение MACD/сигнала\n
+        🔴 **Bollinger / Stoch+EMA / VWAP** — скальп M15\n
+        🟣 **Turtle Soup** — ложный пробой минимума\n
+        🟣 **80-20 по Рашке** — бар разворота\n
+        🆕 **Своя** — загрузи .py с классом BaseStrategy
+        """)
 
-        **Возврат к среднему:**
-        🟢 **RSI Mean Reversion** — вход при RSI < 30.
+    with st.expander("📝 Формат своей стратегии"):
+        st.code("""from strategies.base import BaseStrategy
+import pandas as pd
 
-        **Моментум:**
-        🟡 **MACD Momentum** — пересечение MACD и сигнала.
+class MyStrategy(BaseStrategy):
+    name = "my_strategy"
+    description = "Описание"
 
-        **Скальпинг (M15):**
-        🔴 **Bollinger Scalp** — отскок от нижней полосы BB.
-        🔴 **Stochastic + EMA** — стохастик + тренд EMA(50).
-        🔴 **VWAP Bounce** — отскок от полосы VWAP.
+    def __init__(self, period: int = 14):
+        self.period = period
 
-        **Контртренд / Разворот:**
-        🟣 **Turtle Soup** — ложный пробой N-барового минимума.
-        🟣 **80-20 по Рашке** — бар с открытием внизу и закрытием вверху диапазона.
+    def generate_signals(self, df: pd.DataFrame):
+        signal = pd.Series(0, index=df.index)
+        # signal = 1  → вход
+        # signal = -1 → выход
+        return signal
+
+    def get_params(self):
+        return {"period": self.period}
+""", language="python")
+
+    with st.expander("🔑 Об API ключах"):
+        st.markdown("""
+        API ключи **не отправляются на сервер** — всё выполняется локально.
+        Ключи хранятся только в памяти сессии и не сохраняются на диск.
+
+        **Без ключей:** только публичные OHLCV (до 1500 баров за запрос).
+
+        **С ключами:**
+        - Выше лимиты на запросы
+        - Доступ к полной истории
+        - Основа для бумажной торговли (в будущем)
+
+        Создать ключи с правами **Read Only** → безопасно.
         """)
 
     with st.expander("🛑 Параметры выхода"):
         st.markdown("""
-        **Стоп-лосс (фиксированный):**
-        Выход если цена падает на X% от цены входа.
-        Проверяется по *low* свечи.
-
-        **Тейк-профит:**
-        Выход если цена растёт на X% от входа.
-        Проверяется по *high* свечи.
-
-        **Трейлинг-стоп:**
-        Скользящий стоп — всегда X% ниже пикового *high*
-        с момента входа. Автоматически подтягивается вверх
-        по мере роста цены. Защищает накопленную прибыль.
-
-        **Приоритет срабатывания:**
-        `Фикс. SL → Трейлинг → Тейк-профит → Сигнал стратегии`
-
-        Все три можно использовать одновременно. `0 = выключено`.
-        """)
-
-    with st.expander("📁 Формат CSV файла"):
-        st.markdown("""
-        Колонки: `timestamp, open, high, low, close, volume`
-
-        ```
-        timestamp,open,high,low,close,volume
-        2026-01-01 00:00:00,97000,97500,96800,97200,45.2
-        ```
-        Регистр колонок не важен.
-        """)
-
-    with st.expander("🔧 Советы"):
-        st.markdown("""
-        - Для скальпинга (M15) берите не менее 90 дней
-        - Проверяйте Sharpe и MDD, не только доходность
-        - Трейлинг-стоп эффективен на трендовых стратегиях
-        - Тестируйте на данных не менее 6–12 месяцев
+        **Стоп-лосс** — фиксированный, по low свечи.\n
+        **Тейк-профит** — фиксированная цель, по high свечи.\n
+        **Трейлинг-стоп** — X% ниже пикового high с момента входа.
+        Подтягивается вверх автоматически.\n
+        Приоритет: `SL → Trail → TP → Сигнал`
         """)
 
     st.divider()
-    st.markdown("**Версия:** MVP — Data + Backtest")
-    st.markdown("**Режим:** Локальный · Офлайн · Только исследования")
+    st.markdown("**Версия:** MVP · Локальный · Офлайн")
 
 
 # ─── ЗАГОЛОВОК ────────────────────────────────────────────────────────────────
@@ -204,15 +237,15 @@ b1.success("MVP — Данные + Бэктест")
 b2.info("Офлайн режим")
 b3.info("Только исследования")
 b4.warning("Торговля отключена")
-b5.warning("Без API ключей")
+b5.warning("API ключи — память")
 
 if not _backend_ok:
     st.error(f"⚠️  Ошибка загрузки модулей: {_backend_error}")
-    st.info("Запускайте из корня репозитория: `python3 -m streamlit run dashboard/strategy_testing_lab.py`")
+    st.info("Запускайте из корня: `python3 -m streamlit run dashboard/strategy_testing_lab.py`")
     st.stop()
 
 # ══════════════════════════════════════════════════════════════════════════════
-# ПЕРИОД И ТАЙМФРЕЙМ — общая строка на всю ширину
+# ПЕРИОД И ТАЙМФРЕЙМ
 # ══════════════════════════════════════════════════════════════════════════════
 st.divider()
 st.subheader("📅  Период и таймфрейм")
@@ -223,11 +256,7 @@ with pt1:
 with pt2:
     end_date = st.date_input("Дата окончания", value=pd.Timestamp("2026-06-22"))
 with pt3:
-    timeframe = st.selectbox(
-        "Таймфрейм",
-        ["15m", "1m", "5m", "30m", "1h", "4h", "1d"],
-        index=0,
-    )
+    timeframe = st.selectbox("Таймфрейм", ["15m", "1m", "5m", "30m", "1h", "4h", "1d"])
 with pt4:
     _dates_ok = end_date >= start_date
     if _dates_ok:
@@ -242,14 +271,14 @@ st.divider()
 left_col, center_col, right_col = st.columns([1.2, 1.4, 1.1])
 
 # ══════════════════════════════════════════════════════════════════════════════
-# ЛЕВАЯ КОЛОНКА — Стратегия + Источник данных
+# ЛЕВАЯ КОЛОНКА — Стратегия + Данные
 # ══════════════════════════════════════════════════════════════════════════════
 with left_col:
 
     # ── Выбор стратегии ───────────────────────────────────────────────────────
     st.subheader("🎯  Стратегия")
 
-    STRATEGY_LABELS_RU = {
+    STRATEGY_LABELS_RU: dict[str, str] = {
         "sma_cross":      "SMA Crossover (тренд)",
         "ema_cross":      "EMA Crossover (тренд)",
         "rsi":            "RSI Mean Reversion (возврат)",
@@ -260,26 +289,28 @@ with left_col:
         "turtle_soup":    "Turtle Soup (контртренд)",
         "raschke_80_20":  "80-20 по Рашке (разворот)",
     }
+    # Добавляем кастомную если загружена
+    if st.session_state.custom_strategy_cls is not None:
+        _cname = st.session_state.custom_strategy_name
+        STRATEGY_LABELS_RU["custom"] = f"🆕 Своя: {_cname}"
 
     strategy_label_to_key = {v: k for k, v in STRATEGY_LABELS_RU.items()}
-    selected_label = st.selectbox(
-        "Выберите стратегию",
-        list(STRATEGY_LABELS_RU.values()),
-    )
+    selected_label = st.selectbox("Выберите стратегию", list(STRATEGY_LABELS_RU.values()))
     selected_key = strategy_label_to_key[selected_label]
 
-    STRATEGY_CAPTIONS_RU = {
-        "sma_cross":      "Трендовая — покупка при пересечении быстрой MA вверх через медленную MA.",
-        "ema_cross":      "Трендовая — то же что SMA, но EMA быстрее реагирует на изменения цены.",
-        "rsi":            "Возврат к среднему — вход при выходе RSI из перепроданности (< 30).",
-        "macd":           "Моментум — пересечение линии MACD и сигнальной линии.",
-        "bollinger_scalp": "Скальп M15 — отскок от нижней полосы Боллинджера, выход у средней линии.",
-        "stoch_ema_scalp": "Скальп M15 — стохастик в зоне перепроданности, фильтр по тренду EMA(50).",
-        "vwap_bounce":    "Скальп M15 — отскок от нижней полосы VWAP, выход при возврате к VWAP.",
-        "turtle_soup":    "Контртренд (Raschke/Connors) — ловля ложного пробоя N-барового минимума.",
-        "raschke_80_20":  "Разворот (Linda Raschke) — вход после бара с открытием внизу и закрытием вверху диапазона.",
+    STRATEGY_CAPTIONS_RU: dict[str, str] = {
+        "sma_cross":      "Трендовая — покупка при пересечении быстрой MA вверх.",
+        "ema_cross":      "Трендовая — то же что SMA, EMA быстрее реагирует.",
+        "rsi":            "Возврат к среднему — вход при RSI < порога перепроданности.",
+        "macd":           "Моментум — пересечение линии MACD и сигнальной.",
+        "bollinger_scalp": "Скальп M15 — отскок от нижней полосы Боллинджера.",
+        "stoch_ema_scalp": "Скальп M15 — стохастик в перепроданности + тренд EMA(50).",
+        "vwap_bounce":    "Скальп M15 — отскок от нижней полосы VWAP.",
+        "turtle_soup":    "Контртренд — ловля ложного пробоя N-барового минимума.",
+        "raschke_80_20":  "Разворот — вход после бара: открытие внизу, закрытие вверху.",
+        "custom":         f"Своя стратегия: {st.session_state.custom_strategy_name}",
     }
-    st.caption(STRATEGY_CAPTIONS_RU[selected_key])
+    st.caption(STRATEGY_CAPTIONS_RU.get(selected_key, ""))
 
     # Динамические параметры стратегии
     strategy_params: dict = {}
@@ -330,49 +361,164 @@ with left_col:
 
     elif selected_key == "turtle_soup":
         pc1, pc2 = st.columns(2)
-        strategy_params["n_bars"] = pc1.number_input(
-            "Период минимума", 5, 100, 20, step=1,
-            help="N-бар для вычисления минимума. Классика: 20.",
-        )
-        strategy_params["exit_ema"] = pc2.number_input(
-            "Выход EMA", 2, 50, 5, step=1,
-            help="Период быстрой EMA для выхода.",
-        )
+        strategy_params["n_bars"] = pc1.number_input("Период минимума", 5, 100, 20, step=1)
+        strategy_params["exit_ema"] = pc2.number_input("Выход EMA", 2, 50, 5, step=1)
 
     elif selected_key == "raschke_80_20":
         pc1, pc2 = st.columns(2)
         strategy_params["threshold"] = float(
-            pc1.number_input(
-                "Порог 80-20 (%)", 5, 40, 20, step=1,
-                help="Доля диапазона свечи (%). Вход: открытие в нижних X%, закрытие в верхних X%.",
-            ) / 100.0
+            pc1.number_input("Порог 80-20 (%)", 5, 40, 20, step=1) / 100.0
         )
-        strategy_params["exit_ema"] = pc2.number_input(
-            "Выход EMA", 2, 50, 5, step=1,
-            help="Период быстрой EMA для выхода из позиции.",
-        )
+        strategy_params["exit_ema"] = pc2.number_input("Выход EMA", 2, 50, 5, step=1)
+
+    elif selected_key == "custom":
+        _default_params = st.session_state.custom_strategy_params
+        if _default_params:
+            st.caption("Параметры стратегии (из __init__):")
+            _p_cols = st.columns(min(len(_default_params), 3))
+            for idx, (pname, pdefault) in enumerate(_default_params.items()):
+                col = _p_cols[idx % len(_p_cols)]
+                if isinstance(pdefault, bool):
+                    strategy_params[pname] = col.checkbox(pname, value=pdefault)
+                elif isinstance(pdefault, int):
+                    strategy_params[pname] = col.number_input(pname, value=pdefault, step=1)
+                elif isinstance(pdefault, float):
+                    strategy_params[pname] = col.number_input(pname, value=pdefault, format="%.4f")
+                else:
+                    strategy_params[pname] = col.text_input(pname, value=str(pdefault))
+        else:
+            st.caption("Параметры не обнаружены — используются значения по умолчанию.")
 
     st.divider()
 
-    # ── Пользовательская стратегия (только просмотр) ──────────────────────────
-    with st.expander("📝  Загрузить свой код стратегии (только просмотр)", expanded=False):
-        st.caption("Код **не выполняется** в текущей версии — только для справки.")
-        uploaded_file = st.file_uploader("Загрузить .py файл", type=["py"])
-        if uploaded_file is not None:
-            st.session_state.custom_code = uploaded_file.read().decode("utf-8")
-            _log(f"Файл стратегии загружен: {uploaded_file.name}")
-            st.success(f"Загружен: {uploaded_file.name}")
-        st.text_area(
-            "Вставить код стратегии",
-            height=160,
+    # ══════════════════════════════════════════════════════════════════════════
+    # СВОЯ СТРАТЕГИЯ — исполняемый блок
+    # ══════════════════════════════════════════════════════════════════════════
+    with st.expander("📝  Своя стратегия", expanded=False):
+        st.caption(
+            "Загрузите .py файл или вставьте код. "
+            "Класс должен наследовать `BaseStrategy` и реализовывать `generate_signals(df)`."
+        )
+
+        _upload = st.file_uploader("Загрузить .py файл", type=["py"], key="strategy_uploader")
+        if _upload is not None:
+            _uploaded_code = _upload.read().decode("utf-8")
+            st.session_state.custom_code = _uploaded_code
+            _log(f"Файл загружен: {_upload.name}")
+
+        _code_input = st.text_area(
+            "Код стратегии",
+            height=200,
             label_visibility="collapsed",
-            placeholder="# Вставьте код стратегии для справки...\n# Код не выполняется.",
+            placeholder=(
+                "from strategies.base import BaseStrategy\nimport pandas as pd\n\n"
+                "class MyStrategy(BaseStrategy):\n"
+                "    def __init__(self, period: int = 14):\n"
+                "        self.period = period\n\n"
+                "    def generate_signals(self, df):\n"
+                "        signal = pd.Series(0, index=df.index)\n"
+                "        # signal[...] = 1  # вход\n"
+                "        # signal[...] = -1 # выход\n"
+                "        return signal\n\n"
+                "    def get_params(self):\n"
+                "        return {'period': self.period}"
+            ),
             key="custom_code",
         )
 
+        _activate_btn = st.button(
+            "▶️  Активировать стратегию",
+            use_container_width=True,
+            type="primary",
+            disabled=not bool(st.session_state.custom_code.strip()),
+        )
+        if _activate_btn:
+            try:
+                cls, params = _load_custom_strategy(st.session_state.custom_code)
+                st.session_state.custom_strategy_cls = cls
+                st.session_state.custom_strategy_params = params
+                st.session_state.custom_strategy_name = cls.__name__
+                _log(f"Стратегия активирована: {cls.__name__}  параметры: {params}")
+                st.rerun()
+            except ValueError as exc:
+                st.error(f"❌  {exc}")
+            except Exception as exc:
+                st.error(f"❌  Неожиданная ошибка: {exc}")
+
+        if st.session_state.custom_strategy_cls is not None:
+            _cls = st.session_state.custom_strategy_cls
+            _desc = getattr(_cls, "description", "—")
+            st.success(
+                f"✅  **{_cls.__name__}** активна\n\n"
+                f"{_desc}\n\n"
+                f"Параметры: `{st.session_state.custom_strategy_params}`"
+            )
+            if st.button("🗑  Удалить кастомную стратегию", use_container_width=True):
+                st.session_state.custom_strategy_cls = None
+                st.session_state.custom_strategy_params = {}
+                st.session_state.custom_strategy_name = ""
+                st.rerun()
+
     st.divider()
 
-    # ── Источник данных ───────────────────────────────────────────────────────
+    # ══════════════════════════════════════════════════════════════════════════
+    # API КЛЮЧИ БИРЖ
+    # ══════════════════════════════════════════════════════════════════════════
+    with st.expander("🔑  API ключи бирж", expanded=False):
+        st.caption(
+            "Ключи хранятся **только в памяти сессии** — не сохраняются на диск и не отправляются "
+            "никуда. Создавайте ключи с правами **Read Only** для безопасности."
+        )
+
+        for _exch in ["binance", "bybit"]:
+            st.markdown(f"**{_exch.title()}**")
+            _k_col, _s_col = st.columns(2)
+            _new_key = _k_col.text_input(
+                "API Key", type="password",
+                value=st.session_state.api_keys[_exch]["key"],
+                key=f"api_key_{_exch}",
+                placeholder="Вставьте API Key",
+            )
+            _new_sec = _s_col.text_input(
+                "API Secret", type="password",
+                value=st.session_state.api_keys[_exch]["secret"],
+                key=f"api_secret_{_exch}",
+                placeholder="Вставьте API Secret",
+            )
+            st.session_state.api_keys[_exch]["key"] = _new_key
+            st.session_state.api_keys[_exch]["secret"] = _new_sec
+
+            _test_btn = st.button(
+                f"🔌  Проверить {_exch.title()}",
+                key=f"test_api_{_exch}",
+                use_container_width=True,
+            )
+            if _test_btn:
+                with st.spinner(f"Проверка {_exch}…"):
+                    try:
+                        dm = DataManager()
+                        _k, _s = _get_api(_exch)
+                        result = dm.check_connection(_exch, _k, _s)
+                        st.session_state.api_status[_exch] = result
+                        _log(f"API {_exch}: {result['message']}")
+                    except Exception as exc:
+                        st.session_state.api_status[_exch] = {"ok": False, "message": str(exc)}
+
+            if _exch in st.session_state.api_status:
+                _st = st.session_state.api_status[_exch]
+                if _st["ok"]:
+                    st.success(f"✅  {_st['message']}")
+                else:
+                    st.error(f"❌  {_st['message']}")
+
+            if _exch != "bybit":
+                st.markdown("---")
+
+    st.divider()
+
+    # ══════════════════════════════════════════════════════════════════════════
+    # ИСТОЧНИК ДАННЫХ
+    # ══════════════════════════════════════════════════════════════════════════
     st.subheader("📡  Источник данных")
 
     data_mode = st.radio(
@@ -385,23 +531,18 @@ with left_col:
 
     if data_mode == "Синтетические данные":
         st.caption(
-            f"Синтетические OHLCV данные · таймфрейм **{timeframe}** · "
-            f"расчётный период **{_n_bars:,} баров**"
+            f"Синтетические OHLCV · **{timeframe}** · **{_n_bars:,} баров**"
             if _dates_ok else "Исправьте диапазон дат выше."
         )
         if st.button("⚡  Сгенерировать данные", use_container_width=True, disabled=not _dates_ok):
-            df_loaded = generate_sample_ohlcv(
-                n_bars=_n_bars, start=str(start_date), freq=timeframe
-            )
+            df_loaded = generate_sample_ohlcv(n_bars=_n_bars, start=str(start_date), freq=timeframe)
             st.session_state.df = df_loaded
-            st.session_state.data_label = (
-                f"Синтетика BTC/USDT {timeframe} — {_n_bars:,} баров"
-            )
+            st.session_state.data_label = f"Синтетика BTC/USDT {timeframe} — {_n_bars:,} баров"
             st.session_state.backtest_results = None
-            _log(f"Синтетические данные: {_n_bars} баров, таймфрейм {timeframe}")
+            _log(f"Синтетика: {_n_bars} баров, {timeframe}")
 
     elif data_mode == "Загрузить CSV":
-        st.caption("CSV должен содержать колонки: timestamp, open, high, low, close, volume")
+        st.caption("Колонки: timestamp, open, high, low, close, volume")
         csv_file = st.file_uploader("Загрузить OHLCV CSV", type=["csv"])
         if csv_file is not None:
             try:
@@ -410,33 +551,32 @@ with left_col:
                 st.session_state.df = df_loaded
                 st.session_state.data_label = f"CSV: {csv_file.name}  ({len(df_loaded):,} баров)"
                 st.session_state.backtest_results = None
-                _log(f"CSV загружен: {csv_file.name}, баров: {len(df_loaded)}")
+                _log(f"CSV: {csv_file.name}, {len(df_loaded)} баров")
                 st.success(f"Загружено {len(df_loaded):,} баров")
             except Exception as exc:
                 st.error(f"Ошибка CSV: {exc}")
 
     else:  # Получить с биржи
         exc_sel = st.selectbox("Биржа", ["binance", "bybit"])
-        sym_sel = st.selectbox(
-            "Торговая пара",
-            TOP_50_PAIRS,
-            index=0,
-            help="Топ-50 торговых пар по капитализации (USDT)",
-        )
+        sym_sel = st.selectbox("Торговая пара", TOP_50_PAIRS, index=0)
 
+        _api_k, _api_s = _get_api(exc_sel)
+        _has_api = bool(_api_k and _api_s)
         _fetch_bars = min(_n_bars, _MAX_EXCHANGE_BARS) if _dates_ok else 500
-        st.info(
-            f"📌 Запрос: {sym_sel} · {timeframe} · до {_fetch_bars:,} баров\n\n"
-            f"Только публичные OHLCV — API ключ не нужен"
-        )
+
+        if _has_api:
+            st.success(f"🔑 API ключи {exc_sel.title()} активны")
+        else:
+            st.info("📌 Публичный режим — API ключ не нужен")
+
         if _dates_ok and _n_bars > _MAX_EXCHANGE_BARS:
             st.warning(
-                f"⚠️  Расчётный период ({_n_bars:,} баров) превышает лимит одного запроса. "
-                f"Будет загружено последних {_MAX_EXCHANGE_BARS} баров."
+                f"⚠️  Период требует {_n_bars:,} баров, лимит запроса — {_MAX_EXCHANGE_BARS}. "
+                "Будут загружены последние бары в диапазоне."
             )
 
         if st.button("📥  Загрузить с биржи", use_container_width=True, disabled=not _dates_ok):
-            with st.spinner(f"Загрузка с {exc_sel}…"):
+            with st.spinner(f"Загрузка {sym_sel} с {exc_sel}…"):
                 try:
                     dm = DataManager()
                     df_loaded = dm.load_from_exchange(
@@ -444,6 +584,8 @@ with left_col:
                         start=str(start_date),
                         end=str(end_date),
                         limit=_fetch_bars,
+                        api_key=_api_k,
+                        api_secret=_api_s,
                     )
                     st.session_state.df = df_loaded
                     st.session_state.data_label = (
@@ -463,7 +605,7 @@ with left_col:
             f"Период: {_df.index[0].date()} → {_df.index[-1].date()}"
         )
     else:
-        st.info("⏳  Данные не загружены — выберите источник выше")
+        st.info("⏳  Данные не загружены")
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -479,60 +621,46 @@ with center_col:
             "Начальный капитал (USDT)", 100, 10_000_000, 10_000, step=500
         )
     with cc2:
-        fee_pct = st.number_input(
-            "Комиссия (%)", 0.0, 5.0, 0.1, step=0.01, format="%.3f"
-        )
+        fee_pct = st.number_input("Комиссия (%)", 0.0, 5.0, 0.1, step=0.01, format="%.3f")
 
     slippage_pct = st.number_input(
         "Проскальзывание (%)", 0.0, 5.0, 0.05, step=0.01, format="%.3f"
     )
-
-    st.selectbox(
-        "Метод расчёта позиции",
-        ["% от капитала", "Фиксированный размер", "На основе риска"],
-    )
-    st.text_input("Исполнение ордеров", value="Маркет-ордер по цене закрытия свечи", disabled=True)
+    st.selectbox("Метод расчёта позиции", ["% от капитала", "Фиксированный", "На основе риска"])
+    st.text_input("Исполнение", value="Маркет-ордер по цене закрытия свечи", disabled=True)
 
     st.divider()
 
     # ── Параметры выхода ──────────────────────────────────────────────────────
     st.subheader("🛑  Выход из позиции")
-    st.caption("Все три параметра независимы. `0` = выключено.")
+    st.caption("Все три независимы. `0` = выключено.")
 
     ex1, ex2 = st.columns(2)
     with ex1:
         stop_loss_pct = st.number_input(
-            "Стоп-лосс (%)",
-            min_value=0.0, max_value=50.0, value=0.0, step=0.1, format="%.1f",
-            help="Фиксированный стоп ниже цены входа. Проверяется по low свечи.",
+            "Стоп-лосс (%)", 0.0, 50.0, 0.0, step=0.1, format="%.1f",
+            help="Фиксированный стоп ниже цены входа. По low свечи.",
         )
     with ex2:
         take_profit_pct = st.number_input(
-            "Тейк-профит (%)",
-            min_value=0.0, max_value=200.0, value=0.0, step=0.1, format="%.1f",
-            help="Фиксированная цель выше цены входа. Проверяется по high свечи.",
+            "Тейк-профит (%)", 0.0, 200.0, 0.0, step=0.1, format="%.1f",
+            help="Фиксированная цель выше цены входа. По high свечи.",
         )
 
     trailing_stop_pct = st.number_input(
-        "Трейлинг-стоп (%)",
-        min_value=0.0, max_value=50.0, value=0.0, step=0.1, format="%.1f",
-        help=(
-            "Скользящий стоп: всегда X% ниже максимального high с момента входа. "
-            "Автоматически подтягивается вверх — защищает накопленную прибыль."
-        ),
+        "Трейлинг-стоп (%)", 0.0, 50.0, 0.0, step=0.1, format="%.1f",
+        help="X% ниже максимального high с момента входа. Подтягивается вверх автоматически.",
     )
 
-    # Сводка активных выходов
-    _active_exits = []
+    _exits = []
     if stop_loss_pct > 0:
-        _active_exits.append(f"🔴 SL {stop_loss_pct:.1f}%")
+        _exits.append(f"🔴 SL {stop_loss_pct:.1f}%")
     if trailing_stop_pct > 0:
-        _active_exits.append(f"🟠 Trail {trailing_stop_pct:.1f}%")
+        _exits.append(f"🟠 Trail {trailing_stop_pct:.1f}%")
     if take_profit_pct > 0:
-        _active_exits.append(f"🟢 TP {take_profit_pct:.1f}%")
-    _active_exits.append("📊 Сигнал стратегии")
-
-    st.caption("Приоритет: " + " → ".join(_active_exits))
+        _exits.append(f"🟢 TP {take_profit_pct:.1f}%")
+    _exits.append("📊 Сигнал")
+    st.caption("Приоритет: " + " → ".join(_exits))
 
     st.divider()
 
@@ -551,18 +679,18 @@ with center_col:
         help=(
             "Сначала загрузите данные" if not data_ready
             else "Исправьте диапазон дат" if not _dates_ok
-            else "Нажмите для запуска бэктеста"
+            else "Запустить бэктест"
         ),
     )
 
-    st.button("📄  Бумажная торговля — отключена", disabled=True, use_container_width=True)
+    st.button("📄  Бумажная торговля — скоро", disabled=True, use_container_width=True)
     st.markdown(
         """
         <div style="
             background:#2a0a0a;border:1px solid #7a0000;border-radius:6px;
             padding:10px 16px;text-align:center;color:#ff6666;font-weight:600;
         ">
-            🔒  Живая торговля — ЗАБЛОКИРОВАНА / ОТКЛЮЧЕНА
+            🔒  Живая торговля — ЗАБЛОКИРОВАНА
         </div>
         """,
         unsafe_allow_html=True,
@@ -570,18 +698,14 @@ with center_col:
 
     # ── Генерация команды CLI ─────────────────────────────────────────────────
     if prepare_btn:
-        fee_frac = fee_pct / 100.0
-        slip_frac = slippage_pct / 100.0
         cmd = (
             f"python -m backtesting.run_strategy \\\n"
             f"  --strategy {selected_key} \\\n"
             f"  --data-source local_csv \\\n"
             f"  --csv data/historical/btc_usdt.csv \\\n"
-            f"  --start {start_date} \\\n"
-            f"  --end {end_date} \\\n"
+            f"  --start {start_date} --end {end_date} \\\n"
             f"  --capital {initial_capital} \\\n"
-            f"  --fee {fee_frac} \\\n"
-            f"  --slippage {slip_frac}"
+            f"  --fee {fee_pct / 100:.4f} --slippage {slippage_pct / 100:.4f}"
         )
         if stop_loss_pct > 0:
             cmd += f" \\\n  --stop-loss {stop_loss_pct / 100:.4f}"
@@ -592,7 +716,7 @@ with center_col:
         for k, v in strategy_params.items():
             cmd += f" \\\n  --param {k}={v}"
         st.session_state.command_preview = cmd
-        _log("Команда CLI сформирована")
+        _log("CLI команда сформирована")
 
     # ── Запуск бэктеста ───────────────────────────────────────────────────────
     if run_btn and data_ready and _dates_ok:
@@ -604,14 +728,17 @@ with center_col:
                     & (df_bt.index <= pd.Timestamp(end_date))
                 ]
                 if df_bt.empty:
-                    st.error("Нет данных в выбранном диапазоне дат.")
+                    st.error("Нет данных в выбранном диапазоне.")
                 else:
-                    strategy = get_strategy(selected_key, strategy_params)
-                    signals = strategy.generate_signals(df_bt)
+                    # Создаём объект стратегии
+                    if selected_key == "custom" and st.session_state.custom_strategy_cls is not None:
+                        strategy = st.session_state.custom_strategy_cls(**strategy_params)
+                    else:
+                        strategy = get_strategy(selected_key, strategy_params)
 
+                    signals = strategy.generate_signals(df_bt)
                     equity_curve, trades = run_backtest(
-                        df_bt,
-                        signals,
+                        df_bt, signals,
                         initial_capital=float(initial_capital),
                         fee=fee_pct / 100.0,
                         slippage=slippage_pct / 100.0,
@@ -619,7 +746,6 @@ with center_col:
                         take_profit=take_profit_pct / 100.0,
                         trailing_stop=trailing_stop_pct / 100.0,
                     )
-
                     metrics = calculate_metrics(equity_curve, trades, float(initial_capital))
                     st.session_state.backtest_results = {
                         "equity_curve": equity_curve,
@@ -630,7 +756,7 @@ with center_col:
                         "bars": len(df_bt),
                     }
                     _log(
-                        f"Бэктест завершён — {selected_label}  "
+                        f"Бэктест — {selected_label}  "
                         f"сделок: {metrics['total_trades']}  "
                         f"доходность: {metrics['total_return']}%"
                     )
@@ -641,22 +767,14 @@ with center_col:
     # ── Предпросмотр команды CLI ──────────────────────────────────────────────
     st.divider()
     st.subheader("💻  Команда CLI")
-    st.caption("Только предпросмотр — команда не выполняется")
-
     if st.session_state.command_preview:
         st.code(st.session_state.command_preview, language="bash")
     else:
         st.markdown(
-            """
-            <div style="
-                background:#0d1117;border:1px solid #30363d;border-radius:6px;
-                padding:14px;font-family:monospace;font-size:12px;
-                color:#8b949e;line-height:1.7;
-            ">
-                $ <span style="color:#3fb950">ожидание конфигурации…</span><br>
-                &gt; нажмите <strong style="color:#e6edf3">📋 Подготовить команду CLI</strong>
-            </div>
-            """,
+            "<div style='background:#0d1117;border:1px solid #30363d;border-radius:6px;"
+            "padding:14px;font-family:monospace;font-size:12px;color:#8b949e;'>"
+            "$ <span style='color:#3fb950'>ожидание конфигурации…</span><br>"
+            "&gt; нажмите 📋 Подготовить команду CLI</div>",
             unsafe_allow_html=True,
         )
 
@@ -671,10 +789,7 @@ with right_col:
     res = st.session_state.backtest_results
     if res:
         m = res["metrics"]
-        st.caption(
-            f"{res['strategy_label']}  |  {res['bars']:,} баров  |  "
-            f"параметры: {res['strategy_params']}"
-        )
+        st.caption(f"{res['strategy_label']}  |  {res['bars']:,} баров")
 
         METRIC_DEFS = [
             ("Общая доходность", f"{m['total_return']:+.2f}%",
@@ -694,59 +809,38 @@ with right_col:
              "green" if m["avg_trade_return"] >= 0 else "red"),
             ("Итог капитал", f"${m['final_equity']:,.2f}", "default"),
         ]
-
+        colour_map = {"green": "#4caf50", "red": "#f44336", "orange": "#ff9800", "default": "#aaaaaa"}
         for label, value, colour in METRIC_DEFS:
             mc, vc = st.columns([1.5, 1])
             mc.markdown(f"<small><b>{label}</b></small>", unsafe_allow_html=True)
-            colour_map = {
-                "green": "#4caf50", "red": "#f44336",
-                "orange": "#ff9800", "default": "#aaaaaa",
-            }
-            hex_c = colour_map.get(colour, "#aaaaaa")
             vc.markdown(
-                f"<span style='font-family:monospace;color:{hex_c};font-size:13px;'>"
+                f"<span style='font-family:monospace;color:{colour_map[colour]};font-size:13px;'>"
                 f"{value}</span>",
                 unsafe_allow_html=True,
             )
     else:
-        PENDING_METRICS_RU = [
-            "Общая доходность", "Макс. просадка", "Коэф. Шарпа", "Коэф. Сортино",
-            "Профит-фактор", "% выигрышных", "Всего сделок", "Ср. доход/сделка",
-        ]
-        for label in PENDING_METRICS_RU:
+        for label in ["Общая доходность", "Макс. просадка", "Коэф. Шарпа",
+                      "Профит-фактор", "% выигрышных", "Всего сделок"]:
             mc, vc = st.columns([1.5, 1])
             mc.markdown(f"<small><b>{label}</b></small>", unsafe_allow_html=True)
-            vc.markdown(
-                "<code style='color:#444;font-size:11px;'>—</code>",
-                unsafe_allow_html=True,
-            )
+            vc.markdown("<code style='color:#444;font-size:11px;'>—</code>", unsafe_allow_html=True)
 
     st.divider()
-
     st.subheader("📋  Журнал")
-    st.caption("Локальные логи сессии — без данных биржи и API")
 
-    if st.button("🗑  Очистить журнал", use_container_width=True):
+    if st.button("🗑  Очистить", use_container_width=True):
         st.session_state.ui_logs = []
         st.rerun()
 
     if st.session_state.ui_logs:
-        st.text_area(
-            "logs",
-            value="\n".join(st.session_state.ui_logs),
-            height=220,
-            label_visibility="collapsed",
-            disabled=True,
-        )
+        st.text_area("logs", value="\n".join(st.session_state.ui_logs),
+                     height=220, label_visibility="collapsed", disabled=True)
     else:
-        st.markdown(
-            "<small style='color:#555;'>Журнал пуст.</small>",
-            unsafe_allow_html=True,
-        )
+        st.markdown("<small style='color:#555;'>Журнал пуст.</small>", unsafe_allow_html=True)
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# ПОЛНАЯ ШИРИНА — Кривая капитала и журнал сделок (после бэктеста)
+# ПОЛНАЯ ШИРИНА — Кривая капитала + Журнал сделок
 # ══════════════════════════════════════════════════════════════════════════════
 if st.session_state.backtest_results:
     res = st.session_state.backtest_results
@@ -758,42 +852,29 @@ if st.session_state.backtest_results:
 
     try:
         import plotly.graph_objects as go
-
         fig = go.Figure()
-        fig.add_trace(
-            go.Scatter(
-                x=equity_curve.index,
-                y=equity_curve["equity"],
-                mode="lines",
-                name="Капитал",
-                line=dict(color="#00e676", width=1.5),
-                fill="tozeroy",
-                fillcolor="rgba(0,230,118,0.06)",
-            )
-        )
+        fig.add_trace(go.Scatter(
+            x=equity_curve.index, y=equity_curve["equity"],
+            mode="lines", name="Капитал",
+            line=dict(color="#00e676", width=1.5),
+            fill="tozeroy", fillcolor="rgba(0,230,118,0.06)",
+        ))
         fig.add_hline(
             y=float(equity_curve["equity"].iloc[0]),
-            line_dash="dot",
-            line_color="#555",
+            line_dash="dot", line_color="#555",
             annotation_text="Начальный капитал",
         )
         fig.update_layout(
-            template="plotly_dark",
-            height=320,
+            template="plotly_dark", height=320,
             margin=dict(l=0, r=0, t=10, b=0),
-            xaxis_title=None,
-            yaxis_title="Портфель (USDT)",
-            showlegend=False,
+            xaxis_title=None, yaxis_title="Портфель (USDT)", showlegend=False,
         )
         st.plotly_chart(fig, use_container_width=True)
     except ImportError:
         st.line_chart(equity_curve["equity"])
 
-    # ── Журнал сделок ─────────────────────────────────────────────────────────
     if trades:
-        # Статистика причин выхода
         from collections import Counter
-        reason_counts = Counter(t.exit_reason for t in trades)
         _reason_labels = {
             "signal":        "📊 Сигнал",
             "stop_loss":     "🔴 Стоп-лосс",
@@ -802,32 +883,28 @@ if st.session_state.backtest_results:
             "end_of_data":   "⏹ Конец данных",
             "":              "—",
         }
-        _reason_summary = "  |  ".join(
+        reason_counts = Counter(t.exit_reason for t in trades)
+        _summary = "  |  ".join(
             f"{_reason_labels.get(r, r)}: {c}"
             for r, c in sorted(reason_counts.items())
         )
-
-        with st.expander(
-            f"📄  Журнал сделок  ({len(trades)} сделок)  —  {_reason_summary}",
-            expanded=False,
-        ):
-            trade_rows = []
-            for t in trades:
-                trade_rows.append(
-                    {
-                        "Вход (время)": str(t.entry_ts)[:16],
-                        "Выход (время)": str(t.exit_ts)[:16] if t.exit_ts else "Открыта",
-                        "Цена входа": f"{t.entry_price:,.2f}",
-                        "Цена выхода": f"{t.exit_price:,.2f}" if t.exit_price else "—",
-                        "PnL (USDT)": f"{t.pnl:+.2f}",
-                        "Доходность (%)": f"{t.pnl_pct:+.2f}%",
-                        "Выход": _reason_labels.get(t.exit_reason, t.exit_reason),
-                    }
-                )
-            st.dataframe(pd.DataFrame(trade_rows), use_container_width=True, hide_index=True)
+        with st.expander(f"📄  Журнал сделок  ({len(trades)})  —  {_summary}", expanded=False):
+            rows = [
+                {
+                    "Вход": str(t.entry_ts)[:16],
+                    "Выход": str(t.exit_ts)[:16] if t.exit_ts else "Открыта",
+                    "Цена входа": f"{t.entry_price:,.2f}",
+                    "Цена выхода": f"{t.exit_price:,.2f}" if t.exit_price else "—",
+                    "PnL (USDT)": f"{t.pnl:+.2f}",
+                    "Доходность": f"{t.pnl_pct:+.2f}%",
+                    "Причина": _reason_labels.get(t.exit_reason, t.exit_reason),
+                }
+                for t in trades
+            ]
+            st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
 
 
-# ─── РЕЖИМ РАБОТЫ (спойлер) ───────────────────────────────────────────────────
+# ─── РЕЖИМ РАБОТЫ ─────────────────────────────────────────────────────────────
 st.divider()
 with st.expander("🛡️  Режим работы", expanded=False):
     sm_col, ss_col, sf_col = st.columns(3)
@@ -836,7 +913,8 @@ with st.expander("🛡️  Режим работы", expanded=False):
             "**Текущий режим**\n"
             "- Локальный офлайн интерфейс\n"
             "- ✅ Движок бэктеста: **активен**\n"
-            "- 🔒 API запросы: **отключены**\n"
+            "- ✅ Кастомные стратегии: **активны**\n"
+            "- 🔑 API ключи: **только в памяти**\n"
             "- 🔒 Живая торговля: **отключена**"
         )
     with ss_col:
@@ -845,14 +923,13 @@ with st.expander("🛡️  Режим работы", expanded=False):
             "- ✅ Синтетические данные\n"
             "- ✅ Загрузка CSV\n"
             "- ✅ Публичные OHLCV с биржи\n"
-            "- ✅ Бэктест 9 стратегий\n"
+            "- ✅ Бэктест 9 стратегий + свои\n"
             "- ✅ SL / TP / Трейлинг-стоп\n"
-            "- ✅ Кривая капитала + сделки"
+            "- ✅ API ключи (Read Only)"
         )
     with sf_col:
         st.markdown(
             "**В будущих версиях**\n"
-            "- 🔜 Запуск своего кода стратегии\n"
             "- 🔜 Сравнение стратегий\n"
             "- 🔜 Оптимизация параметров\n"
             "- 🔜 Бумажная торговля\n"

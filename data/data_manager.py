@@ -3,7 +3,7 @@ from __future__ import annotations
 import pandas as pd
 
 from data.csv_loader import load_ohlcv_csv
-from data.fetcher import fetch_ohlcv
+from data.fetcher import fetch_ohlcv, check_connection
 
 
 class DataManager:
@@ -18,8 +18,20 @@ class DataManager:
         start: str | None = None,
         end: str | None = None,
         limit: int = 1000,
+        api_key: str | None = None,
+        api_secret: str | None = None,
     ) -> pd.DataFrame:
-        return fetch_ohlcv(exchange, symbol, timeframe, start, end, limit)
+        return fetch_ohlcv(
+            exchange, symbol, timeframe, start, end, limit, api_key, api_secret
+        )
+
+    def check_connection(
+        self,
+        exchange: str,
+        api_key: str | None = None,
+        api_secret: str | None = None,
+    ) -> dict:
+        return check_connection(exchange, api_key, api_secret)
 
     def filter_dates(
         self,
