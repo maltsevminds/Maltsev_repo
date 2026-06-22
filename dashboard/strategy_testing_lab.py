@@ -150,6 +150,41 @@ b3.info("Research Only")
 b4.warning("Live Trading Disabled")
 b5.warning("No API Keys")
 
+# Quick help expander at top
+with st.expander("📖 **Quick Start & Help** — Click to expand", expanded=False):
+    col_qs, col_metrics, col_strats = st.columns(3)
+
+    with col_qs:
+        st.markdown("**⚡ Quick Start (2 min)**")
+        st.markdown("""
+        1. **Choose Strategy** — Select from 4 options
+        2. **Load Data** — Sample/CSV/Exchange
+        3. **Configure** — Set dates & fees
+        4. **Run** — Click "▶️ Run Backtest"
+        """)
+
+    with col_metrics:
+        st.markdown("**📊 Key Metrics**")
+        st.markdown("""
+        - **Sharpe** > 1.0 = good
+        - **Sortino** > 1.0 = good
+        - **Win Rate** > 50% = good
+        - **Profit Factor** > 1.5 = good
+        - **MDD** < 20% = good
+        """)
+
+    with col_strats:
+        st.markdown("**🎯 Strategies**")
+        st.markdown("""
+        - **SMA** — Trend, slow
+        - **EMA** — Trend, fast
+        - **RSI** — Reversion, ranges
+        - **MACD** — Momentum, signals
+        """)
+
+    st.divider()
+    st.markdown("**📚 Full Docs:** [USER_GUIDE.md](https://github.com/maltsevminds/Maltsev_repo) | [README.md](https://github.com/maltsevminds/Maltsev_repo)")
+
 if not _backend_ok:
     st.error(f"⚠️  Backend modules not loaded: {_backend_error}")
     st.info("Run from repo root: `streamlit run dashboard/strategy_testing_lab.py`")
