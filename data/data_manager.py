@@ -3,7 +3,7 @@ from __future__ import annotations
 import pandas as pd
 
 from data.csv_loader import load_ohlcv_csv
-from data.fetcher import fetch_ohlcv, check_connection
+from data.fetcher import fetch_ohlcv, fetch_ohlcv_all, check_connection
 
 
 class DataManager:
@@ -23,6 +23,23 @@ class DataManager:
     ) -> pd.DataFrame:
         return fetch_ohlcv(
             exchange, symbol, timeframe, start, end, limit, api_key, api_secret
+        )
+
+    def load_from_exchange_all(
+        self,
+        exchange: str,
+        symbol: str,
+        timeframe: str,
+        start: str,
+        end: str,
+        api_key: str | None = None,
+        api_secret: str | None = None,
+        chunk_size: int = 1000,
+        on_progress=None,
+    ) -> pd.DataFrame:
+        return fetch_ohlcv_all(
+            exchange, symbol, timeframe, start, end,
+            api_key, api_secret, chunk_size, on_progress,
         )
 
     def check_connection(

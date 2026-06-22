@@ -128,7 +128,6 @@ _TF_SECONDS: dict[str, int] = {
     "1m": 60, "5m": 300, "15m": 900, "30m": 1800,
     "1h": 3600, "4h": 14400, "1d": 86400,
 }
-_MAX_EXCHANGE_BARS = 1500
 
 
 def _calc_bars(start: pd.Timestamp, end: pd.Timestamp, freq: str) -> int:
@@ -200,12 +199,57 @@ class MyStrategy(BaseStrategy):
         return {"period": self.period}
 """, language="python")
 
+    with st.expander("🤖  Промт для адаптации стратегии"):
+        st.caption("Скопируй и вставь в любой ИИ-чат, чтобы адаптировать код стратегии под эту систему.")
+        st.code("""Адаптируй стратегию для системы бэктестинга на Python.
+
+Система ожидает класс, наследующий BaseStrategy:
+
+from strategies.base import BaseStrategy
+import pandas as pd
+import numpy as np
+
+class MyStrategy(BaseStrategy):
+    name = "my_strategy"
+    description = "Краткое описание"
+
+    def __init__(self, period: int = 14, threshold: float = 0.02):
+        self.period = period
+        self.threshold = threshold
+
+    def generate_signals(self, df: pd.DataFrame) -> pd.Series:
+        signal = pd.Series(0, index=df.index)
+        # signal[condition] = 1   → вход в лонг
+        # signal[condition] = -1  → выход из лонга
+        return signal
+
+    def get_params(self):
+        return {"period": self.period, "threshold": self.threshold}
+
+Правила:
+1. generate_signals принимает df с колонками: open, high, low, close, volume
+   и DatetimeIndex. Возвращает pd.Series(int) с теми же индексами.
+2. 1 = открыть лонг (игнорируется если уже в позиции)
+   -1 = закрыть лонг (игнорируется если нет позиции)
+   0 = ничего не делать
+3. Параметры __init__ — только примитивы: int, float, bool, str.
+   Обязательно с дефолтными значениями.
+4. Не смотри вперёд: сигнал на баре i строится только по данным до i включительно.
+5. ATR-стоп и сложные выходы встраивай в generate_signals() (выставляй -1).
+   Движок также поддерживает SL/TP/Trail через UI — их можно оставить на движок.
+6. Доступные библиотеки: pandas (pd), numpy (np).
+   Сторонние (ta, talib и т.д.) не поддерживаются — реализуй индикаторы вручную.
+7. Не используй глобальные переменные, файлы, сеть или async.
+
+Вставь оригинальный код стратегии ниже и адаптируй под этот формат:
+""", language="text")
+
     with st.expander("🔑 Об API ключах"):
         st.markdown("""
         API ключи **не отправляются на сервер** — всё выполняется локально.
         Ключи хранятся только в памяти сессии и не сохраняются на диск.
 
-        **Без ключей:** только публичные OHLCV (до 1500 баров за запрос).
+        **Без ключей:** публичные OHLCV — полная история постранично.
 
         **С ключами:**
         - Выше лимиты на запросы
@@ -562,40 +606,44 @@ with left_col:
 
         _api_k, _api_s = _get_api(exc_sel)
         _has_api = bool(_api_k and _api_s)
-        _fetch_bars = min(_n_bars, _MAX_EXCHANGE_BARS) if _dates_ok else 500
 
         if _has_api:
             st.success(f"🔑 API ключи {exc_sel.title()} активны")
         else:
             st.info("📌 Публичный режим — API ключ не нужен")
 
-        if _dates_ok and _n_bars > _MAX_EXCHANGE_BARS:
-            st.warning(
-                f"⚠️  Период требует {_n_bars:,} баров, лимит запроса — {_MAX_EXCHANGE_BARS}. "
-                "Будут загружены последние бары в диапазоне."
-            )
+        if _dates_ok:
+            st.caption(f"Будет загружено ~{_n_bars:,} баров ({timeframe}) постранично.")
 
         if st.button("📥  Загрузить с биржи", use_container_width=True, disabled=not _dates_ok):
-            with st.spinner(f"Загрузка {sym_sel} с {exc_sel}…"):
-                try:
-                    dm = DataManager()
-                    df_loaded = dm.load_from_exchange(
-                        exc_sel, sym_sel, timeframe,
-                        start=str(start_date),
-                        end=str(end_date),
-                        limit=_fetch_bars,
-                        api_key=_api_k,
-                        api_secret=_api_s,
-                    )
-                    st.session_state.df = df_loaded
-                    st.session_state.data_label = (
-                        f"{exc_sel.title()} {sym_sel} {timeframe} — {len(df_loaded):,} баров"
-                    )
-                    st.session_state.backtest_results = None
-                    _log(f"Загружено {len(df_loaded)} баров: {exc_sel} {sym_sel} {timeframe}")
-                    st.success(f"Загружено {len(df_loaded):,} баров")
-                except Exception as exc:
-                    st.error(f"Ошибка загрузки: {exc}")
+            _progress_bar = st.progress(0, text="Подключение к бирже…")
+            _status = st.empty()
+            try:
+                dm = DataManager()
+
+                def _on_progress(fetched: int, total: int) -> None:
+                    pct = min(fetched / max(total, 1), 1.0)
+                    _progress_bar.progress(pct, text=f"Загружено {fetched:,} / {total:,} баров…")
+
+                df_loaded = dm.load_from_exchange_all(
+                    exc_sel, sym_sel, timeframe,
+                    start=str(start_date),
+                    end=str(end_date),
+                    api_key=_api_k,
+                    api_secret=_api_s,
+                    on_progress=_on_progress,
+                )
+                _progress_bar.empty()
+                st.session_state.df = df_loaded
+                st.session_state.data_label = (
+                    f"{exc_sel.title()} {sym_sel} {timeframe} — {len(df_loaded):,} баров"
+                )
+                st.session_state.backtest_results = None
+                _log(f"Загружено {len(df_loaded)} баров: {exc_sel} {sym_sel} {timeframe}")
+                _status.success(f"✅  Загружено {len(df_loaded):,} баров")
+            except Exception as exc:
+                _progress_bar.empty()
+                st.error(f"Ошибка загрузки: {exc}")
 
     # Статус данных
     if st.session_state.df is not None:
