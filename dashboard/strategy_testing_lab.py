@@ -56,89 +56,6 @@ def _log(msg: str) -> None:
     st.session_state.ui_logs = st.session_state.ui_logs[:80]
 
 
-# ─── SIDEBAR HELP ─────────────────────────────────────────────────────────────
-with st.sidebar:
-    st.markdown("## 📖 Help & Documentation")
-
-    with st.expander("⚡ Quick Start (2 min)", expanded=True):
-        st.markdown("""
-        **1. Choose Strategy**
-        - Select from 4 built-in strategies
-        - Adjust parameters if needed
-
-        **2. Load Data**
-        - "Sample Data" for instant testing
-        - Or upload CSV / fetch from exchange
-
-        **3. Configure Backtest**
-        - Set date range, capital, fees
-        - Keep defaults if unsure
-
-        **4. Run & Analyze**
-        - Click "▶️ Run Backtest"
-        - See equity curve & metrics
-        """)
-
-    with st.expander("📊 Metrics Guide"):
-        st.markdown("""
-        **Total Return** — Overall profit %
-
-        **Max Drawdown** — Worst peak-to-bottom %
-
-        **Sharpe Ratio** — Return per unit risk
-        (> 1.0 is good, > 2.0 is excellent)
-
-        **Win Rate** — % of profitable trades
-        (> 50% is good)
-
-        **Profit Factor** — Gains / Losses ratio
-        (> 1.5 is good, > 2.0 is excellent)
-        """)
-
-    with st.expander("🎯 Strategy Descriptions"):
-        st.markdown("""
-        **SMA Crossover**
-        Fast MA crosses slow MA = trend following
-        Good for: strong trends
-
-        **EMA Crossover**
-        Like SMA but faster reaction
-        Good for: mid-range trends
-
-        **RSI Mean Reversion**
-        Buy oversold, sell overbought
-        Good for: ranging/flat markets
-
-        **MACD Momentum**
-        MACD line crosses signal line
-        Good for: momentum moves, more signals
-        """)
-
-    with st.expander("📁 Data Format"):
-        st.markdown("""
-        **CSV must have columns:**
-        - timestamp
-        - open
-        - high
-        - low
-        - close
-        - volume
-
-        **Example:**
-        ```
-        timestamp,open,high,low,close,volume
-        2023-01-01 00:00:00,16500,16550,16450,16490,45.2
-        2023-01-01 01:00:00,16490,16550,16480,16540,38.9
-        ```
-        """)
-
-    st.divider()
-    st.markdown("**📚 Full Docs**")
-    st.markdown("[USER_GUIDE.md](https://github.com/maltsevminds/Maltsev_repo/blob/main/USER_GUIDE.md) — Complete reference")
-    st.markdown("[README.md](https://github.com/maltsevminds/Maltsev_repo/blob/main/README.md) — Project overview")
-    st.markdown("[GitHub](https://github.com/maltsevminds/Maltsev_repo) — Source code")
-
-
 # ─── HEADER ───────────────────────────────────────────────────────────────────
 st.title("⚗️  Strategy Testing Lab")
 st.markdown("*Local offline crypto strategy backtesting cockpit*")
@@ -150,40 +67,19 @@ b3.info("Research Only")
 b4.warning("Live Trading Disabled")
 b5.warning("No API Keys")
 
-# Quick help expander at top
-with st.expander("📖 **Quick Start & Help** — Click to expand", expanded=False):
-    col_qs, col_metrics, col_strats = st.columns(3)
+# ─── HELP INFO BOX ────────────────────────────────────────────────────────────
+st.info("""
+**📖 HOW TO USE:**
 
-    with col_qs:
-        st.markdown("**⚡ Quick Start (2 min)**")
-        st.markdown("""
-        1. **Choose Strategy** — Select from 4 options
-        2. **Load Data** — Sample/CSV/Exchange
-        3. **Configure** — Set dates & fees
-        4. **Run** — Click "▶️ Run Backtest"
-        """)
+1️⃣ **Select Strategy** (left) — Choose from SMA, EMA, RSI, MACD
+2️⃣ **Load Data** (left) — Sample data / CSV / Fetch from exchange
+3️⃣ **Configure** (center) — Set dates, capital, fees
+4️⃣ **Run Backtest** (center) — Click button, see results (right)
 
-    with col_metrics:
-        st.markdown("**📊 Key Metrics**")
-        st.markdown("""
-        - **Sharpe** > 1.0 = good
-        - **Sortino** > 1.0 = good
-        - **Win Rate** > 50% = good
-        - **Profit Factor** > 1.5 = good
-        - **MDD** < 20% = good
-        """)
+**📊 Metrics:** Sharpe > 1.0 ✓ | Win Rate > 50% ✓ | Profit Factor > 1.5 ✓
+**📚 Docs:** [USER_GUIDE.md](https://github.com/maltsevminds/Maltsev_repo/blob/main/USER_GUIDE.md)
+""")
 
-    with col_strats:
-        st.markdown("**🎯 Strategies**")
-        st.markdown("""
-        - **SMA** — Trend, slow
-        - **EMA** — Trend, fast
-        - **RSI** — Reversion, ranges
-        - **MACD** — Momentum, signals
-        """)
-
-    st.divider()
-    st.markdown("**📚 Full Docs:** [USER_GUIDE.md](https://github.com/maltsevminds/Maltsev_repo) | [README.md](https://github.com/maltsevminds/Maltsev_repo)")
 
 if not _backend_ok:
     st.error(f"⚠️  Backend modules not loaded: {_backend_error}")
