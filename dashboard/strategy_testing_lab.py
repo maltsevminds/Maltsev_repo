@@ -15,7 +15,7 @@ st.set_page_config(
     page_title="Strategy Testing Lab",
     page_icon="⚗️",
     layout="wide",
-    initial_sidebar_state="collapsed",
+    initial_sidebar_state="expanded",
 )
 
 # ─── LAZY BACKEND IMPORTS (show friendly error if missing) ────────────────────
@@ -54,6 +54,89 @@ def _log(msg: str) -> None:
     ts = datetime.now().strftime("%H:%M:%S")
     st.session_state.ui_logs.insert(0, f"[{ts}]  {msg}")
     st.session_state.ui_logs = st.session_state.ui_logs[:80]
+
+
+# ─── SIDEBAR HELP ─────────────────────────────────────────────────────────────
+with st.sidebar:
+    st.markdown("## 📖 Help & Documentation")
+
+    with st.expander("⚡ Quick Start (2 min)", expanded=True):
+        st.markdown("""
+        **1. Choose Strategy**
+        - Select from 4 built-in strategies
+        - Adjust parameters if needed
+
+        **2. Load Data**
+        - "Sample Data" for instant testing
+        - Or upload CSV / fetch from exchange
+
+        **3. Configure Backtest**
+        - Set date range, capital, fees
+        - Keep defaults if unsure
+
+        **4. Run & Analyze**
+        - Click "▶️ Run Backtest"
+        - See equity curve & metrics
+        """)
+
+    with st.expander("📊 Metrics Guide"):
+        st.markdown("""
+        **Total Return** — Overall profit %
+
+        **Max Drawdown** — Worst peak-to-bottom %
+
+        **Sharpe Ratio** — Return per unit risk
+        (> 1.0 is good, > 2.0 is excellent)
+
+        **Win Rate** — % of profitable trades
+        (> 50% is good)
+
+        **Profit Factor** — Gains / Losses ratio
+        (> 1.5 is good, > 2.0 is excellent)
+        """)
+
+    with st.expander("🎯 Strategy Descriptions"):
+        st.markdown("""
+        **SMA Crossover**
+        Fast MA crosses slow MA = trend following
+        Good for: strong trends
+
+        **EMA Crossover**
+        Like SMA but faster reaction
+        Good for: mid-range trends
+
+        **RSI Mean Reversion**
+        Buy oversold, sell overbought
+        Good for: ranging/flat markets
+
+        **MACD Momentum**
+        MACD line crosses signal line
+        Good for: momentum moves, more signals
+        """)
+
+    with st.expander("📁 Data Format"):
+        st.markdown("""
+        **CSV must have columns:**
+        - timestamp
+        - open
+        - high
+        - low
+        - close
+        - volume
+
+        **Example:**
+        ```
+        timestamp,open,high,low,close,volume
+        2023-01-01 00:00:00,16500,16550,16450,16490,45.2
+        2023-01-01 01:00:00,16490,16550,16480,16540,38.9
+        ```
+        """)
+
+    st.divider()
+    st.markdown("**📚 Full Docs**")
+    st.markdown("[USER_GUIDE.md](https://github.com/maltsevminds/Maltsev_repo/blob/main/USER_GUIDE.md) — Complete reference")
+    st.markdown("[README.md](https://github.com/maltsevminds/Maltsev_repo/blob/main/README.md) — Project overview")
+    st.markdown("[GitHub](https://github.com/maltsevminds/Maltsev_repo) — Source code")
 
 
 # ─── HEADER ───────────────────────────────────────────────────────────────────
