@@ -2,6 +2,12 @@
 import numpy as np
 import pandas as pd
 
+# Map common exchange-style timeframe aliases to valid pandas offset strings.
+_FREQ_ALIASES = {
+    "1m": "1min", "5m": "5min", "15m": "15min", "30m": "30min",
+    "1h": "1h", "4h": "4h", "1d": "1D",
+}
+
 
 def generate_sample_ohlcv(
     n_bars: int = 2000,
@@ -13,7 +19,8 @@ def generate_sample_ohlcv(
     seed: int = 42,
 ) -> pd.DataFrame:
     np.random.seed(seed)
-    index = pd.date_range(start=start, periods=n_bars, freq=freq)
+    pandas_freq = _FREQ_ALIASES.get(freq, freq)
+    index = pd.date_range(start=start, periods=n_bars, freq=pandas_freq)
 
     log_returns = np.random.normal(drift, volatility, n_bars)
     close = initial_price * np.exp(np.cumsum(log_returns))

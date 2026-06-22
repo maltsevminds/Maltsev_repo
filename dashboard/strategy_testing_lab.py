@@ -112,6 +112,9 @@ with left_col:
             "ema_cross": "Trend Following — EMA crossover, reacts faster than SMA.",
             "rsi": "Mean Reversion — enter on RSI oversold exit, close on overbought exit.",
             "macd": "Momentum — MACD line / signal line crossover.",
+            "bollinger_scalp": "Scalp (M15) — buy lower-band bounce, exit at the middle band.",
+            "stoch_ema_scalp": "Scalp (M15) — Stochastic cross in oversold, filtered by EMA trend.",
+            "vwap_bounce": "Scalp (M15) — buy stretch below VWAP band, exit on return to VWAP.",
         }[selected_key]
     )
 
@@ -138,6 +141,29 @@ with left_col:
         strategy_params["fast"] = pc1.number_input("Fast EMA", 5, 50, 12, step=1)
         strategy_params["slow"] = pc2.number_input("Slow EMA", 10, 100, 26, step=1)
         strategy_params["signal_period"] = pc3.number_input("Signal", 3, 20, 9, step=1)
+
+    elif selected_key == "bollinger_scalp":
+        pc1, pc2 = st.columns(2)
+        strategy_params["period"] = pc1.number_input("BB Period", 5, 100, 20, step=1)
+        strategy_params["num_std"] = float(
+            pc2.number_input("Std Dev", 1.0, 4.0, 2.0, step=0.1, format="%.1f")
+        )
+
+    elif selected_key == "stoch_ema_scalp":
+        pc1, pc2, pc3 = st.columns(3)
+        strategy_params["k_period"] = pc1.number_input("%K Period", 5, 50, 14, step=1)
+        strategy_params["d_period"] = pc2.number_input("%D Period", 2, 20, 3, step=1)
+        strategy_params["trend_period"] = pc3.number_input("Trend EMA", 10, 200, 50, step=1)
+        pc4, pc5 = st.columns(2)
+        strategy_params["oversold"] = float(pc4.number_input("Oversold", 5, 45, 25, step=1))
+        strategy_params["overbought"] = float(pc5.number_input("Overbought", 55, 95, 75, step=1))
+
+    elif selected_key == "vwap_bounce":
+        pc1, pc2 = st.columns(2)
+        strategy_params["window"] = pc1.number_input("VWAP Window (bars)", 10, 200, 48, step=1)
+        strategy_params["deviation"] = float(
+            pc2.number_input("Deviation %", 0.1, 5.0, 0.4, step=0.1, format="%.1f") / 100.0
+        )
 
     st.divider()
 
@@ -176,7 +202,7 @@ with left_col:
 
     if data_mode == "Sample Data (synthetic)":
         n_bars = st.slider("Number of bars", 500, 5000, 2000, step=100)
-        sample_freq = st.selectbox("Timeframe", ["1h", "4h", "1d", "15m"], index=0)
+        sample_freq = st.selectbox("Timeframe", ["15m", "1m", "5m", "1h", "4h", "1d"], index=0)
         if st.button("⚡  Generate Sample Data", use_container_width=True):
             df_loaded = generate_sample_ohlcv(
                 n_bars=n_bars, start="2023-01-01", freq=sample_freq
