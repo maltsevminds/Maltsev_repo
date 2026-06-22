@@ -1,42 +1,94 @@
-# Dashboard
+# Strategy Testing Lab — Dashboard
 
-## Strategy Testing Lab
+Live Streamlit UI for crypto strategy backtesting. Local, offline, no API keys.
 
-Local offline Streamlit UI for future crypto strategy backtesting.
-
-### Run locally
+## Run
 
 ```bash
-# from the repo root
-streamlit run dashboard/strategy_testing_lab.py
+python3 -m streamlit run dashboard/strategy_testing_lab.py
 ```
 
-Or with an explicit port:
+Opens at `http://localhost:8501`
+
+## Features
+
+✅ **4 Built-in Strategies:**
+- SMA Crossover (Trend Following)
+- EMA Crossover (Trend Following) 
+- RSI Mean Reversion
+- MACD Momentum
+
+✅ **Data Sources:**
+- Synthetic sample data (100% local, instant)
+- Upload CSV (Binance, Kraken, etc. exports)
+- Fetch public OHLCV from Binance/Bybit (no API key)
+
+✅ **Real Backtesting:**
+- Vectorised engine (fast)
+- Configurable fees & slippage
+- Full performance metrics (Sharpe, Sortino, MDD, Win Rate, Profit Factor)
+- Equity curve (Plotly interactive graph)
+- Trade log export
+
+✅ **Safe & Offline:**
+- No API keys required
+- No live trading
+- No strategy code execution
+- No network calls (except public OHLCV)
+
+## Full Documentation
+
+👉 **[USER_GUIDE.md](../USER_GUIDE.md)** — Complete walkthrough with examples
+
+## Quick Example
+
+1. **Strategy:** SMA Crossover (defaults: fast=20, slow=50)
+2. **Data:** "Sample Data" → 2000 bars, 1h → Generate
+3. **Config:** Keep defaults (Capital 10k, Fee 0.1%, Slippage 0.05%)
+4. **Run:** Click "▶️ Run Backtest"
+5. **Result:** See equity curve, metrics, and trade log
+
+**Total time:** ~2 seconds
+
+## CLI Usage (Advanced)
 
 ```bash
-streamlit run dashboard/strategy_testing_lab.py --server.port 8501
+python -m backtesting.run_strategy \
+  --strategy sma_cross \
+  --data-source local_csv \
+  --csv path/to/ohlcv.csv \
+  --start 2023-01-01 --end 2024-01-01 \
+  --capital 10000 --fee 0.001 --slippage 0.0005 \
+  --param fast=20 --param slow=50
 ```
 
-### Install dependency
+See `USER_GUIDE.md` for complete CLI reference.
 
-```bash
-pip install streamlit
+## Project Structure
+
+```
+config/              — settings & paths
+data/                — CSV loader, OHLCV fetcher (ccxt), sample generator
+strategies/          — BaseStrategy, SMA, EMA, RSI, MACD, registry
+backtesting/         — vectorised engine, metrics, CLI runner
+dashboard/           — Streamlit UI (this directory)
+USER_GUIDE.md        — Complete user documentation
 ```
 
-### What this UI does (MVP)
+## Limitations (MVP)
 
-- Upload or paste a Python strategy file (display only — never executed)
-- Configure market, timeframe, exchange/data source
-- Set backtest parameters (dates, capital, fees, slippage)
-- Generate a terminal command preview (text only — never run)
-- View placeholder result cards
-- View local session UI logs
+- Long-only positions (no shorts)
+- Single position at a time
+- Market orders at candle close only
+- Uniform fees (no volume-based discounts)
+- No parameter optimization
+- No custom strategy code execution (yet)
 
-### What this UI does NOT do
+## Not Implemented (Future)
 
-- Execute any strategy code
-- Run real backtests
-- Connect to Bybit or Binance
-- Use API keys
-- Place orders
-- Perform any network calls
+- Live trading
+- Paper trading
+- Optimization
+- Multi-strategy backtests
+- Risk management features
+- AI strategy evaluation
