@@ -57,6 +57,10 @@ _defaults: dict = {
     "selected_strategy": "sma_cross",  # persists selectbox selection across reruns
     "data_symbol": "BTC/USDT",
     "data_source": "",
+    "pt_active": False,
+    "pt_session": None,
+    "opt_results": None,
+    "opt_strategy": "sma_cross",
 }
 for _k, _v in _defaults.items():
     if _k not in st.session_state:
@@ -181,6 +185,185 @@ def _load_all_user_strategies() -> None:
             }
         except Exception:
             pass
+
+
+# ─── ОПТИМИЗАЦИЯ: ДИАПАЗОНЫ ПАРАМЕТРОВ ПО УМОЛЧАНИЮ ──────────────────────────
+_OPT_DEFAULTS: dict = {
+    "sma_cross":      {"fast": (5, 50, 5, "int"),    "slow": (20, 200, 20, "int")},
+    "ema_cross":      {"fast": (5, 30, 5, "int"),    "slow": (15, 100, 15, "int")},
+    "rsi":            {"period": (7, 21, 7, "int"),  "oversold": (20, 35, 5, "int"),  "overbought": (65, 80, 5, "int")},
+    "macd":           {"fast": (8, 20, 4, "int"),    "slow": (20, 40, 5, "int"),      "signal_period": (7, 12, 2, "int")},
+    "bollinger_scalp":{"period": (10, 30, 5, "int"), "num_std": (1.5, 3.0, 0.5, "float")},
+    "stoch_ema_scalp":{"k_period": (9, 21, 6, "int"),"oversold": (15, 30, 5, "int")},
+    "vwap_bounce":    {"window": (20, 100, 20, "int"),"deviation": (0.2, 0.8, 0.2, "float")},
+    "turtle_soup":    {"n_bars": (10, 40, 5, "int"),  "exit_ema": (3, 15, 3, "int")},
+    "raschke_80_20":  {"threshold": (0.10, 0.30, 0.05, "float"), "exit_ema": (3, 10, 2, "int")},
+}
+
+
+def _build_param_values(pmin: float, pmax: float, pstep: float, ptype: str) -> list:
+    if ptype == "int":
+        return list(range(int(pmin), int(pmax) + 1, max(1, int(pstep))))
+    n = round((pmax - pmin) / pstep) + 1
+    return [round(pmin + i * pstep, 6) for i in range(n)]
+
+
+def _pt_run(
+    exchange: str,
+    symbol: str,
+    timeframe: str,
+    strategy_key: str,
+    strategy_params: dict,
+    capital: float,
+    lookback: int,
+    api_key: str | None = None,
+    api_secret: str | None = None,
+) -> dict:
+    """Fetch recent bars from exchange and simulate paper trades."""
+    from datetime import datetime, timedelta, timezone
+    dm = DataManager()
+    tf_sec = _TF_SECONDS.get(timeframe, 3600)
+    end_dt = datetime.now(timezone.utc)
+    start_dt = end_dt - timedelta(seconds=tf_sec * (lookback + 50))
+
+    df = dm.load_from_exchange_all(
+        exchange, symbol, timeframe,
+        start=start_dt.strftime("%Y-%m-%d %H:%M"),
+        end=end_dt.strftime("%Y-%m-%d %H:%M"),
+        api_key=api_key,
+        api_secret=api_secret,
+    )
+    if df.empty:
+        raise ValueError("Биржа не вернула данных — проверьте пару и таймфрейм.")
+    df = df.tail(lookback)
+
+    if strategy_key.startswith("custom__"):
+        cn = strategy_key[8:]
+        ci = st.session_state.custom_strategies.get(cn, {})
+        if not ci.get("cls"):
+            raise ValueError(f"Стратегия '{cn}' не найдена.")
+        strategy = ci["cls"](**strategy_params)
+    else:
+        strategy = get_strategy(strategy_key, strategy_params)
+
+    signals = strategy.generate_signals(df)
+
+    in_position = False
+    entry_price = 0.0
+    entry_time = None
+    virtual_capital = float(capital)
+    qty = 0.0
+    trades: list[dict] = []
+
+    for ts, sig in signals.items():
+        price = float(df.loc[ts, "close"])
+        if not in_position and int(sig) == 1:
+            qty = virtual_capital / price
+            entry_price = price
+            entry_time = ts
+            in_position = True
+        elif in_position and int(sig) == -1:
+            pnl = qty * (price - entry_price)
+            virtual_capital += pnl
+            trades.append({
+                "Вход": str(entry_time)[:16],
+                "Цена входа": round(entry_price, 4),
+                "Выход": str(ts)[:16],
+                "Цена выхода": round(price, 4),
+                "PnL (USDT)": round(pnl, 2),
+                "Доходность %": round((price - entry_price) / entry_price * 100, 2),
+                "Капитал": round(virtual_capital, 2),
+            })
+            in_position = False
+            qty = 0.0
+
+    current_price = float(df["close"].iloc[-1])
+    unrealized_pnl  = qty * (current_price - entry_price) if in_position else 0.0
+    unrealized_pct  = (current_price - entry_price) / entry_price * 100 if (in_position and entry_price) else 0.0
+
+    return {
+        "df": df, "signals": signals,
+        "in_position": in_position,
+        "entry_price": round(entry_price, 4),
+        "entry_time": str(entry_time)[:16] if entry_time else None,
+        "qty": round(qty, 8),
+        "trades": trades,
+        "capital": round(virtual_capital, 2),
+        "unrealized_pnl": round(unrealized_pnl, 2),
+        "unrealized_pct": round(unrealized_pct, 2),
+        "current_price": round(current_price, 4),
+        "last_updated": str(pd.Timestamp.now())[:19],
+        "last_bar": str(df.index[-1])[:19],
+        "bars_loaded": len(df),
+        "exchange": exchange, "symbol": symbol, "timeframe": timeframe,
+    }
+
+
+def _opt_run(
+    df: pd.DataFrame,
+    strategy_key: str,
+    param_grid: dict,
+    optimize_by: str,
+    initial_capital: float,
+    fee_pct: float,
+    slippage_pct: float,
+    sl_pct: float,
+    tp_pct: float,
+    trail_pct: float,
+    progress_cb=None,
+) -> pd.DataFrame:
+    """Grid-search over param_grid = {name: [val, ...]}; returns sorted DataFrame."""
+    import itertools
+    names = list(param_grid.keys())
+    combos = list(itertools.product(*param_grid.values()))
+    total = len(combos)
+    rows: list[dict] = []
+
+    for i, combo in enumerate(combos):
+        params = dict(zip(names, combo))
+        try:
+            if strategy_key.startswith("custom__"):
+                cn = strategy_key[8:]
+                ci = st.session_state.custom_strategies.get(cn, {})
+                if not ci.get("cls"):
+                    continue
+                strategy = ci["cls"](**params)
+            else:
+                strategy = get_strategy(strategy_key, params)
+
+            signals = strategy.generate_signals(df)
+            ec, trades = run_backtest(
+                df, signals,
+                initial_capital=float(initial_capital),
+                fee=fee_pct / 100.0, slippage=slippage_pct / 100.0,
+                stop_loss=sl_pct / 100.0, take_profit=tp_pct / 100.0,
+                trailing_stop=trail_pct / 100.0,
+            )
+            m = calculate_metrics(ec, trades, float(initial_capital))
+            pf_raw = m.get("profit_factor", 0)
+            pf_val = 99.0 if str(pf_raw) == "∞" else float(pf_raw or 0)
+
+            rows.append({
+                **{k: round(float(v), 4) if isinstance(v, float) else int(v) for k, v in params.items()},
+                "доходность_%": round(float(m.get("total_return", 0) or 0), 2),
+                "шарп":         round(float(m.get("sharpe_ratio",  0) or 0), 3),
+                "просадка_%":   round(float(m.get("max_drawdown",  0) or 0), 2),
+                "проф_фактор":  round(pf_val, 3),
+                "побед_%":      round(float(m.get("win_rate",      0) or 0), 1),
+                "сделок":       int(m.get("total_trades", 0) or 0),
+            })
+        except Exception:
+            pass
+        if progress_cb:
+            progress_cb(i + 1, total)
+
+    if not rows:
+        return pd.DataFrame()
+
+    sort_col = {"Доходность": "доходность_%", "Шарп": "шарп", "Профит-фактор": "проф_фактор"}.get(
+        optimize_by, "доходность_%"
+    )
+    return pd.DataFrame(rows).sort_values(sort_col, ascending=False).reset_index(drop=True)
 
 
 # ─── ЭКСПОРТ АНАЛИЗА ──────────────────────────────────────────────────────────
@@ -1001,6 +1184,14 @@ with left_col:
             f"✅  {st.session_state.data_label}\n\n"
             f"Период: {_df.index[0].date()} → {_df.index[-1].date()}"
         )
+        _csv_fname = export_analysis_safe_filename(st.session_state.data_label) + ".csv"
+        st.download_button(
+            "💾  Скачать данные CSV",
+            data=_df.reset_index().to_csv(index=False).encode("utf-8"),
+            file_name=_csv_fname,
+            mime="text/csv",
+            use_container_width=True,
+        )
     else:
         st.info("⏳  Данные не загружены")
 
@@ -1321,6 +1512,326 @@ if st.session_state.backtest_results:
         export_analysis_render_downloads(res, st.session_state.df)
 
 
+# ══════════════════════════════════════════════════════════════════════════════
+# БУМАЖНАЯ ТОРГОВЛЯ
+# ══════════════════════════════════════════════════════════════════════════════
+st.divider()
+st.subheader("📄  Бумажная торговля")
+st.caption(
+    "Симуляция торговли на реальных данных с биржи. "
+    "Виртуальный капитал, сигналы и сделки — без реального исполнения."
+)
+
+_pt_cfg_col, _pt_stat_col = st.columns([1.5, 1])
+
+with _pt_cfg_col:
+    st.markdown("**Конфигурация**")
+    _pt_c1, _pt_c2, _pt_c3 = st.columns(3)
+    _pt_exchange = _pt_c1.selectbox("Биржа", ["binance", "bybit"], key="pt_exch_sel")
+    _pt_symbol   = _pt_c2.selectbox("Пара", TOP_50_PAIRS, key="pt_sym_sel")
+    _pt_tf       = _pt_c3.selectbox("Таймфрейм", list(_TF_SECONDS.keys()), key="pt_tf_sel")
+    _pt_c4, _pt_c5 = st.columns(2)
+    _pt_capital  = _pt_c4.number_input(
+        "Виртуальный капитал (USDT)", 100, 1_000_000, 10_000, step=500, key="pt_cap_num"
+    )
+    _pt_lookback = _pt_c5.number_input(
+        "Баров истории", 50, 1000, 200, step=50, key="pt_look_num"
+    )
+    _pt_strat_label = STRATEGY_LABELS_RU.get(selected_key, selected_key)
+    st.caption(f"Стратегия: **{_pt_strat_label}** · параметры из раздела выше")
+
+with _pt_stat_col:
+    _pt_sess = st.session_state.pt_session
+    if _pt_sess:
+        _pt_status_color = "🟢" if _pt_sess["in_position"] else "⚪"
+        _pt_status_text  = "В позиции" if _pt_sess["in_position"] else "Нет позиции"
+        st.markdown(f"**Статус:** {_pt_status_color} {_pt_status_text}")
+        if _pt_sess["in_position"]:
+            _unr = _pt_sess["unrealized_pnl"]
+            _pct = _pt_sess["unrealized_pct"]
+            _col = "green" if _unr >= 0 else "red"
+            st.markdown(
+                f"Вход: **{_pt_sess['entry_time']}** @ **{_pt_sess['entry_price']:,}**\n\n"
+                f"Текущая цена: **{_pt_sess['current_price']:,}**",
+            )
+            st.markdown(
+                f"<span style='color:{'#4caf50' if _unr >= 0 else '#f44336'};font-size:16px;font-weight:600;'>"
+                f"Нереализованный PnL: {_unr:+.2f} USDT ({_pct:+.2f}%)</span>",
+                unsafe_allow_html=True,
+            )
+        st.metric(
+            "Виртуальный капитал",
+            f"${_pt_sess['capital']:,.2f}",
+            delta=f"{_pt_sess['capital'] - _pt_capital:+.2f}",
+        )
+        st.caption(
+            f"📊 Сделок: {len(_pt_sess['trades'])}  |  "
+            f"Баров: {_pt_sess['bars_loaded']}  |  "
+            f"Обновлено: {_pt_sess['last_updated']}"
+        )
+    else:
+        st.info("Нажмите ▶️ Запустить для начала симуляции")
+
+_pt_b1, _pt_b2, _pt_b3 = st.columns(3)
+_pt_api_k, _pt_api_s = _get_api(_pt_exchange)
+
+if _pt_b1.button(
+    "▶️  Запустить / Обновить",
+    key="pt_start_btn", use_container_width=True, type="primary",
+):
+    with st.spinner(f"Загружаем {_pt_lookback} баров {_pt_symbol} {_pt_tf} с {_pt_exchange}…"):
+        try:
+            _pt_result = _pt_run(
+                _pt_exchange, _pt_symbol, _pt_tf,
+                selected_key, strategy_params,
+                _pt_capital, _pt_lookback,
+                _pt_api_k, _pt_api_s,
+            )
+            st.session_state.pt_session = _pt_result
+            st.session_state.pt_active = True
+            _log(
+                f"Бумажная торговля: {_pt_symbol} {_pt_tf}  "
+                f"{'в позиции' if _pt_result['in_position'] else 'без позиции'}  "
+                f"сделок: {len(_pt_result['trades'])}"
+            )
+            st.rerun()
+        except Exception as _pt_exc:
+            st.error(f"❌  {_pt_exc}")
+
+_pt_b2.markdown("")
+
+if _pt_b3.button(
+    "⏹  Остановить",
+    key="pt_stop_btn", use_container_width=True,
+    disabled=st.session_state.pt_session is None,
+):
+    st.session_state.pt_session = None
+    st.session_state.pt_active = False
+    _log("Бумажная торговля остановлена")
+    st.rerun()
+
+if st.session_state.pt_session:
+    _pt_s = st.session_state.pt_session
+
+    # Trades table
+    if _pt_s["trades"]:
+        with st.expander(f"📄  Виртуальные сделки ({len(_pt_s['trades'])})", expanded=True):
+            _pt_df_trades = pd.DataFrame(_pt_s["trades"])
+            st.dataframe(_pt_df_trades, use_container_width=True, hide_index=True)
+    else:
+        st.info("Сделок ещё не было — стратегия не подала сигналов за выбранный период.")
+
+    # Signals chart
+    try:
+        import plotly.graph_objects as _go2
+        _pt_df_chart = _pt_s["df"].tail(min(150, len(_pt_s["df"])))
+        _pt_sig = _pt_s["signals"].reindex(_pt_df_chart.index).fillna(0)
+        _pt_fig = _go2.Figure()
+        _pt_fig.add_trace(_go2.Scatter(
+            x=_pt_df_chart.index, y=_pt_df_chart["close"],
+            mode="lines", name="Цена", line=dict(color="#aaaaaa", width=1.2),
+        ))
+        _pt_entries = _pt_sig[_pt_sig == 1]
+        _pt_exits   = _pt_sig[_pt_sig == -1]
+        if not _pt_entries.empty:
+            _pt_fig.add_trace(_go2.Scatter(
+                x=_pt_entries.index,
+                y=_pt_df_chart.loc[_pt_entries.index, "close"],
+                mode="markers", name="Вход",
+                marker=dict(symbol="triangle-up", color="#4caf50", size=12),
+            ))
+        if not _pt_exits.empty:
+            _pt_fig.add_trace(_go2.Scatter(
+                x=_pt_exits.index,
+                y=_pt_df_chart.loc[_pt_exits.index, "close"],
+                mode="markers", name="Выход",
+                marker=dict(symbol="triangle-down", color="#f44336", size=12),
+            ))
+        _pt_fig.update_layout(
+            template="plotly_dark", height=300,
+            margin=dict(l=0, r=0, t=10, b=0),
+            xaxis_title=None, yaxis_title="Цена",
+            legend=dict(orientation="h", y=1.02, x=0),
+        )
+        st.plotly_chart(_pt_fig, use_container_width=True)
+    except ImportError:
+        st.line_chart(_pt_s["df"]["close"].tail(150))
+
+    # Download virtual trades as CSV
+    if _pt_s["trades"]:
+        st.download_button(
+            "💾  Скачать виртуальные сделки CSV",
+            data=pd.DataFrame(_pt_s["trades"]).to_csv(index=False).encode("utf-8"),
+            file_name=f"paper_{_pt_s['symbol'].replace('/', '_')}_{_pt_s['timeframe']}.csv",
+            mime="text/csv",
+        )
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# ОПТИМИЗАЦИЯ ПАРАМЕТРОВ
+# ══════════════════════════════════════════════════════════════════════════════
+st.divider()
+st.subheader("🔬  Оптимизация параметров")
+st.caption(
+    "Перебор комбинаций параметров выбранной стратегии на загруженных данных. "
+    "Результаты сортируются по выбранной метрике."
+)
+
+if st.session_state.df is None:
+    st.warning("⚠️  Сначала загрузите данные (левая колонка).")
+else:
+    _opt_df_src = st.session_state.df
+
+    _opt_l, _opt_r = st.columns([1.6, 1])
+
+    with _opt_l:
+        st.markdown("**Стратегия и параметры**")
+
+        _opt_strat_options = {k: v for k, v in STRATEGY_LABELS_RU.items() if not k.startswith("custom__")}
+        _opt_strat_labels  = list(_opt_strat_options.values())
+        _opt_strat_keys    = list(_opt_strat_options.keys())
+        _opt_saved_idx = _opt_strat_keys.index(
+            st.session_state.opt_strategy if st.session_state.opt_strategy in _opt_strat_keys else "sma_cross"
+        )
+        _opt_sel_label = st.selectbox(
+            "Стратегия", _opt_strat_labels, index=_opt_saved_idx, key="opt_strat_sel"
+        )
+        _opt_sel_key = _opt_strat_keys[_opt_strat_labels.index(_opt_sel_label)]
+        st.session_state.opt_strategy = _opt_sel_key
+
+        _opt_param_defs = _OPT_DEFAULTS.get(_opt_sel_key, {})
+        _opt_grid: dict[str, list] = {}
+        _opt_total_combos = 1
+
+        if _opt_param_defs:
+            st.markdown("**Диапазоны параметров:**")
+            for _pname, (_pmin, _pmax, _pstep, _ptype) in _opt_param_defs.items():
+                _pc1, _pc2, _pc3, _pc4 = st.columns([1.2, 1.2, 1.2, 0.6])
+                _imin = _pc1.number_input(
+                    f"{_pname} min", value=_pmin,
+                    step=1 if _ptype == "int" else 0.01, format="%g", key=f"opt_{_pname}_min"
+                )
+                _imax = _pc2.number_input(
+                    f"{_pname} max", value=_pmax,
+                    step=1 if _ptype == "int" else 0.01, format="%g", key=f"opt_{_pname}_max"
+                )
+                _istep = _pc3.number_input(
+                    f"{_pname} step", value=_pstep,
+                    min_value=0.001, step=1 if _ptype == "int" else 0.01,
+                    format="%g", key=f"opt_{_pname}_step"
+                )
+                _ivals = _build_param_values(float(_imin), float(_imax), float(_istep), _ptype)
+                _pc4.markdown(f"<br><small>{len(_ivals)} зн.</small>", unsafe_allow_html=True)
+                _opt_grid[_pname] = _ivals
+                _opt_total_combos *= len(_ivals)
+        else:
+            st.info("Для этой стратегии диапазоны не заданы.")
+
+        _comb_color = "red" if _opt_total_combos > 500 else ("orange" if _opt_total_combos > 100 else "green")
+        st.markdown(
+            f"<span style='color:{'#4caf50' if _comb_color=='green' else '#ff9800' if _comb_color=='orange' else '#f44336'};'>"
+            f"Комбинаций: **{_opt_total_combos}**</span>"
+            + (" — много, запуск займёт время" if _opt_total_combos > 200 else ""),
+            unsafe_allow_html=True,
+        )
+
+    with _opt_r:
+        st.markdown("**Параметры бэктеста**")
+        _opt_capital  = st.number_input("Капитал (USDT)", 100, 10_000_000, 10_000, step=500, key="opt_cap")
+        _opt_fee      = st.number_input("Комиссия (%)", 0.0, 5.0, 0.1, step=0.01, format="%.3f", key="opt_fee")
+        _opt_slip     = st.number_input("Проскальзывание (%)", 0.0, 5.0, 0.05, step=0.01, format="%.3f", key="opt_slip")
+        _opt_sl       = st.number_input("Стоп-лосс (%)", 0.0, 50.0, 0.0, step=0.5, format="%.1f", key="opt_sl")
+        _opt_tp       = st.number_input("Тейк-профит (%)", 0.0, 200.0, 0.0, step=0.5, format="%.1f", key="opt_tp")
+        st.markdown("**Метрика оптимизации**")
+        _opt_metric = st.radio(
+            "Оптимизировать по:",
+            ["Доходность", "Шарп", "Профит-фактор"],
+            horizontal=True, key="opt_metric_radio",
+        )
+
+    _opt_date_ok = end_date >= start_date
+    _opt_df_bt = _opt_df_src[
+        (_opt_df_src.index >= pd.Timestamp(start_date))
+        & (_opt_df_src.index <= pd.Timestamp(end_date))
+    ] if _opt_date_ok else _opt_df_src
+
+    _opt_run_disabled = (not _opt_param_defs) or (_opt_total_combos == 0) or (_opt_total_combos > 5000)
+    if _opt_total_combos > 5000:
+        st.error("Слишком много комбинаций (> 5000). Уменьшите диапазоны.")
+
+    if st.button(
+        f"🔬  Запустить оптимизацию  ({_opt_total_combos} комб.)",
+        use_container_width=True, type="primary",
+        disabled=_opt_run_disabled, key="opt_run_btn",
+    ):
+        _opt_pb = st.progress(0, text="Оптимизация…")
+
+        def _opt_prog(done: int, total: int) -> None:
+            _opt_pb.progress(min(done / max(total, 1), 1.0), text=f"Обработано {done}/{total}…")
+
+        with st.spinner("Запуск оптимизации…"):
+            try:
+                _opt_res_df = _opt_run(
+                    _opt_df_bt, _opt_sel_key, _opt_grid, _opt_metric,
+                    _opt_capital, _opt_fee, _opt_slip, _opt_sl, _opt_tp, 0.0,
+                    progress_cb=_opt_prog,
+                )
+                _opt_pb.empty()
+                st.session_state.opt_results = _opt_res_df
+                _log(
+                    f"Оптимизация {_opt_sel_key}: {_opt_total_combos} комб.  "
+                    f"лучшая {_opt_metric}: "
+                    + (str(_opt_res_df.iloc[0].to_dict()) if len(_opt_res_df) else "нет результатов")
+                )
+                st.rerun()
+            except Exception as _opt_exc:
+                _opt_pb.empty()
+                st.error(f"❌  Ошибка оптимизации: {_opt_exc}")
+
+    if st.session_state.opt_results is not None:
+        _res = st.session_state.opt_results
+        if _res.empty:
+            st.warning("Оптимизация не дала результатов — все комбинации вызвали ошибки.")
+        else:
+            st.success(f"✅  Найдено {len(_res)} комбинаций. Сортировка по: **{_opt_metric}**")
+
+            # Highlight best row
+            _param_cols  = [c for c in _res.columns if c not in ("доходность_%", "шарп", "просадка_%", "проф_фактор", "побед_%", "сделок")]
+            _metric_cols = [c for c in _res.columns if c in ("доходность_%", "шарп", "просадка_%", "проф_фактор", "побед_%", "сделок")]
+
+            st.dataframe(
+                _res,
+                use_container_width=True,
+                hide_index=False,
+                column_config={
+                    "доходность_%": st.column_config.NumberColumn("Доходность %", format="%.2f"),
+                    "шарп":         st.column_config.NumberColumn("Шарп",         format="%.3f"),
+                    "просадка_%":   st.column_config.NumberColumn("Просадка %",   format="%.2f"),
+                    "проф_фактор":  st.column_config.NumberColumn("Проф.фактор",  format="%.3f"),
+                    "побед_%":      st.column_config.NumberColumn("Побед %",       format="%.1f"),
+                    "сделок":       st.column_config.NumberColumn("Сделок"),
+                },
+            )
+
+            _best = _res.iloc[0]
+            _best_params_str = "  |  ".join(
+                f"**{k}** = `{_best[k]}`" for k in _param_cols if k in _best
+            )
+            st.success(f"🏆  Лучшие параметры:  {_best_params_str}")
+
+            _opt_dl_col1, _opt_dl_col2 = st.columns(2)
+            _opt_dl_col1.download_button(
+                "💾  Скачать результаты CSV",
+                data=_res.to_csv(index=True).encode("utf-8"),
+                file_name=f"opt_{_opt_sel_key}_{_opt_metric.lower()}.csv",
+                mime="text/csv",
+                use_container_width=True,
+            )
+            if _opt_dl_col2.button("🗑  Очистить результаты", use_container_width=True, key="opt_clear_btn"):
+                st.session_state.opt_results = None
+                st.rerun()
+
+
 # ─── РЕЖИМ РАБОТЫ ─────────────────────────────────────────────────────────────
 st.divider()
 with st.expander("🛡️  Режим работы", expanded=False):
@@ -1338,18 +1849,18 @@ with st.expander("🛡️  Режим работы", expanded=False):
         st.markdown(
             "**Доступно сейчас**\n"
             "- ✅ Синтетические данные\n"
-            "- ✅ Загрузка CSV\n"
-            "- ✅ Публичные OHLCV с биржи\n"
+            "- ✅ Загрузка CSV / Биржа\n"
+            "- ✅ Скачать данные CSV\n"
             "- ✅ Бэктест 9 стратегий + свои\n"
             "- ✅ SL / TP / Трейлинг-стоп\n"
-            "- ✅ API ключи (Read Only)"
+            "- ✅ API ключи (Read Only)\n"
+            "- ✅ Бумажная торговля\n"
+            "- ✅ Оптимизация параметров"
         )
     with sf_col:
         st.markdown(
             "**В будущих версиях**\n"
             "- 🔜 Сравнение стратегий\n"
-            "- 🔜 Оптимизация параметров\n"
-            "- 🔜 Бумажная торговля\n"
             "- 🔜 Живая торговля\n"
             "- 🔜 AI оценка стратегий"
         )
