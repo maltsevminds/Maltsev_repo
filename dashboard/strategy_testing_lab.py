@@ -560,6 +560,85 @@ class MyStrategy(BaseStrategy):
         """)
 
     st.divider()
+
+    # ── 🔑 API ключи бирж ────────────────────────────────────────────────────
+    with st.expander("🔑  API ключи бирж", expanded=False):
+        st.caption(
+            "Ключи хранятся **только в памяти сессии** — не сохраняются на диск "
+            "и не отправляются никуда. Создавайте ключи с правами **Read Only**."
+        )
+        for _exch in ["binance", "bybit"]:
+            st.markdown(f"**{_exch.title()}**")
+            _k_col, _s_col = st.columns(2)
+            _new_key = _k_col.text_input(
+                "API Key", type="password",
+                value=st.session_state.api_keys[_exch]["key"],
+                key=f"sb_api_key_{_exch}",
+                placeholder="Вставьте API Key",
+            )
+            _new_sec = _s_col.text_input(
+                "API Secret", type="password",
+                value=st.session_state.api_keys[_exch]["secret"],
+                key=f"sb_api_secret_{_exch}",
+                placeholder="Вставьте API Secret",
+            )
+            st.session_state.api_keys[_exch]["key"] = _new_key
+            st.session_state.api_keys[_exch]["secret"] = _new_sec
+            if st.button(
+                f"🔌  Проверить {_exch.title()}",
+                key=f"sb_test_api_{_exch}",
+                use_container_width=True,
+            ):
+                with st.spinner(f"Проверка {_exch}…"):
+                    try:
+                        dm = DataManager()
+                        _k, _s = _get_api(_exch)
+                        result = dm.check_connection(_exch, _k, _s)
+                        st.session_state.api_status[_exch] = result
+                        _log(f"API {_exch}: {result['message']}")
+                    except Exception as exc:
+                        st.session_state.api_status[_exch] = {"ok": False, "message": str(exc)}
+            if _exch in st.session_state.api_status:
+                _st = st.session_state.api_status[_exch]
+                if _st["ok"]:
+                    st.success(f"✅  {_st['message']}")
+                else:
+                    st.error(f"❌  {_st['message']}")
+            if _exch != "bybit":
+                st.markdown("---")
+
+    # ── 🔜 Бумажная торговля ─────────────────────────────────────────────────
+    with st.expander("🔜  Бумажная торговля", expanded=False):
+        st.markdown(
+            "<div style='background:#0d1117;border:1px solid #30363d;"
+            "border-radius:6px;padding:8px 12px;text-align:center;"
+            "color:#8b949e;font-size:12px;margin-bottom:10px;'>"
+            "🔜 &nbsp; В разработке</div>",
+            unsafe_allow_html=True,
+        )
+        st.markdown("""
+        **Что будет доступно:**
+        - 📡 Подключение к бирже по API
+        - ▶️ Запуск стратегии на живых данных
+        - 📊 Виртуальный портфель без реальных сделок
+        - 🔔 Логирование сигналов и виртуальных сделок
+        - 📈 Equity curve в реальном времени
+        """)
+        st.caption("⚠️ Живая торговля остаётся заблокирована.")
+        pt1, pt2 = st.columns(2)
+        pt1.text_input("Биржа", value="binance", disabled=True, key="pt_exchange")
+        pt2.text_input("Пара", value="BTC/USDT", disabled=True, key="pt_symbol")
+        st.number_input(
+            "Виртуальный капитал (USDT)", value=10000, step=500,
+            disabled=True, key="pt_capital",
+        )
+        st.button(
+            "▶️  Запустить бумажную торговлю",
+            use_container_width=True, disabled=True,
+            help="Функция в разработке",
+        )
+
+    st.divider()
     st.markdown("**Версия:** MVP · Локальный · Офлайн")
 
 
@@ -825,61 +904,6 @@ with left_col:
     st.divider()
 
     # ══════════════════════════════════════════════════════════════════════════
-    # API КЛЮЧИ БИРЖ
-    # ══════════════════════════════════════════════════════════════════════════
-    with st.expander("🔑  API ключи бирж", expanded=False):
-        st.caption(
-            "Ключи хранятся **только в памяти сессии** — не сохраняются на диск и не отправляются "
-            "никуда. Создавайте ключи с правами **Read Only** для безопасности."
-        )
-
-        for _exch in ["binance", "bybit"]:
-            st.markdown(f"**{_exch.title()}**")
-            _k_col, _s_col = st.columns(2)
-            _new_key = _k_col.text_input(
-                "API Key", type="password",
-                value=st.session_state.api_keys[_exch]["key"],
-                key=f"api_key_{_exch}",
-                placeholder="Вставьте API Key",
-            )
-            _new_sec = _s_col.text_input(
-                "API Secret", type="password",
-                value=st.session_state.api_keys[_exch]["secret"],
-                key=f"api_secret_{_exch}",
-                placeholder="Вставьте API Secret",
-            )
-            st.session_state.api_keys[_exch]["key"] = _new_key
-            st.session_state.api_keys[_exch]["secret"] = _new_sec
-
-            _test_btn = st.button(
-                f"🔌  Проверить {_exch.title()}",
-                key=f"test_api_{_exch}",
-                use_container_width=True,
-            )
-            if _test_btn:
-                with st.spinner(f"Проверка {_exch}…"):
-                    try:
-                        dm = DataManager()
-                        _k, _s = _get_api(_exch)
-                        result = dm.check_connection(_exch, _k, _s)
-                        st.session_state.api_status[_exch] = result
-                        _log(f"API {_exch}: {result['message']}")
-                    except Exception as exc:
-                        st.session_state.api_status[_exch] = {"ok": False, "message": str(exc)}
-
-            if _exch in st.session_state.api_status:
-                _st = st.session_state.api_status[_exch]
-                if _st["ok"]:
-                    st.success(f"✅  {_st['message']}")
-                else:
-                    st.error(f"❌  {_st['message']}")
-
-            if _exch != "bybit":
-                st.markdown("---")
-
-    st.divider()
-
-    # ══════════════════════════════════════════════════════════════════════════
     # ИСТОЧНИК ДАННЫХ
     # ══════════════════════════════════════════════════════════════════════════
     st.subheader("📡  Источник данных")
@@ -1056,7 +1080,6 @@ with center_col:
         ),
     )
 
-    st.button("📄  Бумажная торговля — скоро", disabled=True, use_container_width=True)
     st.markdown(
         """
         <div style="
