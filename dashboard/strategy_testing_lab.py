@@ -1713,19 +1713,41 @@ else:
     with _opt_l:
         st.markdown("**Стратегия и параметры**")
 
-        _opt_strat_options = {k: v for k, v in STRATEGY_LABELS_RU.items() if not k.startswith("custom__")}
+        _opt_strat_options = STRATEGY_LABELS_RU
         _opt_strat_labels  = list(_opt_strat_options.values())
         _opt_strat_keys    = list(_opt_strat_options.keys())
-        _opt_saved_idx = _opt_strat_keys.index(
-            st.session_state.opt_strategy if st.session_state.opt_strategy in _opt_strat_keys else "sma_cross"
-        )
+        _opt_saved = st.session_state.opt_strategy
+        if _opt_saved not in _opt_strat_keys:
+            _opt_saved = "sma_cross"
+        _opt_saved_idx = _opt_strat_keys.index(_opt_saved)
         _opt_sel_label = st.selectbox(
             "Стратегия", _opt_strat_labels, index=_opt_saved_idx, key="opt_strat_sel"
         )
         _opt_sel_key = _opt_strat_keys[_opt_strat_labels.index(_opt_sel_label)]
         st.session_state.opt_strategy = _opt_sel_key
 
-        _opt_param_defs = _OPT_DEFAULTS.get(_opt_sel_key, {})
+        # Param grid: built-in strategies use _OPT_DEFAULTS;
+        # custom strategies derive ranges from __init__ default values
+        if _opt_sel_key.startswith("custom__"):
+            _cn_opt = _opt_sel_key[8:]
+            _ci_opt = st.session_state.custom_strategies.get(_cn_opt, {})
+            _raw_defaults = _ci_opt.get("params", {})
+            _opt_param_defs: dict = {}
+            for _pn, _pd in _raw_defaults.items():
+                if isinstance(_pd, bool):
+                    continue  # booleans can't be range-optimised
+                elif isinstance(_pd, int):
+                    _lo = max(1, _pd // 2)
+                    _hi = max(_pd * 3, _lo + 1)
+                    _st = max(1, (_hi - _lo) // 10)
+                    _opt_param_defs[_pn] = (_lo, _hi, _st, "int")
+                elif isinstance(_pd, float):
+                    _lo = round(_pd * 0.5, 6)
+                    _hi = round(_pd * 2.0, 6)
+                    _st = round((_hi - _lo) / 10.0, 6)
+                    _opt_param_defs[_pn] = (_lo, _hi, _st, "float")
+        else:
+            _opt_param_defs = _OPT_DEFAULTS.get(_opt_sel_key, {})
         _opt_grid: dict[str, list] = {}
         _opt_total_combos = 1
 
