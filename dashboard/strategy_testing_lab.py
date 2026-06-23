@@ -20,6 +20,34 @@ st.set_page_config(
     initial_sidebar_state="expanded",
 )
 
+st.markdown("""
+<style>
+/* Typography */
+html, body, [class*="css"] { font-family: 'Inter', 'Segoe UI', system-ui, sans-serif; }
+h1 { font-size: 1.6rem !important; font-weight: 700 !important; letter-spacing: -.5px; }
+h2 { font-size: 1.1rem !important; font-weight: 600 !important; }
+h3 { font-size: 1rem !important; font-weight: 600 !important; }
+/* Dividers */
+hr { border-color: #21262d !important; margin: 14px 0 !important; }
+/* Buttons */
+.stButton > button { border-radius: 7px !important; font-weight: 500 !important; letter-spacing: .2px; }
+.stButton > button[kind="primary"] { background: linear-gradient(135deg,#1565c0,#0288d1) !important; border: none !important; }
+/* Expanders */
+[data-testid="stExpander"] > details { border: 1px solid #21262d !important; border-radius: 8px !important; }
+[data-testid="stExpander"] > details > summary { font-weight: 500; }
+/* DataFrames */
+[data-testid="stDataFrame"] { border-radius: 8px; }
+/* Info/success/warning blocks */
+.stAlert { border-radius: 8px !important; }
+/* Metric widgets */
+[data-testid="metric-container"] { background: #0d1117; border: 1px solid #21262d; border-radius: 8px; padding: 10px 14px !important; }
+/* Number inputs */
+[data-testid="stNumberInput"] { border-radius: 6px; }
+/* Pills */
+[data-testid="stPills"] button { border-radius: 20px !important; font-size: 12px !important; }
+</style>
+""", unsafe_allow_html=True)
+
 # ─── ЗАГРУЗКА БЭКЕНДА ─────────────────────────────────────────────────────────
 @st.cache_resource(show_spinner=False)
 def _load_backend():
@@ -624,23 +652,49 @@ def export_analysis_render_downloads(res: dict, df_source: pd.DataFrame) -> None
     )
     pfx = f"{s}_{sym}_{tf}"
 
-    st.subheader("📤  Выгрузка для анализа стратегии")
+    st.subheader("📤  Выгрузка для анализа стратегии",
+                 help="Скачайте результаты для внешнего анализа, AI-чатов или таблиц Excel.")
+
+    # One-click ZIP with all files
+    import zipfile
+    import io as _io_zip
+    _zip_buf = _io_zip.BytesIO()
+    with zipfile.ZipFile(_zip_buf, "w", zipfile.ZIP_DEFLATED) as _zf:
+        _zf.writestr(f"{pfx}_summary.json",       export_analysis_to_json_bytes(summary))
+        _zf.writestr(f"{pfx}_trades.csv",          export_analysis_to_csv_bytes(trades_df))
+        _zf.writestr(f"{pfx}_equity.csv",          export_analysis_to_csv_bytes(equity_df))
+        _zf.writestr(f"{pfx}_analysis_pack.json",  export_analysis_to_json_bytes(pack))
+    _zip_bytes = _zip_buf.getvalue()
+
+    st.download_button(
+        "📦  Скачать всё одним архивом (.zip)",
+        data=_zip_bytes,
+        file_name=f"{pfx}_full_analysis.zip",
+        mime="application/zip",
+        use_container_width=True,
+        type="primary",
+        help="ZIP с 4 файлами: summary.json, trades.csv, equity.csv, analysis_pack.json",
+    )
     d1, d2, d3, d4 = st.columns(4)
     d1.download_button(
         "📄 summary.json", export_analysis_to_json_bytes(summary),
         f"{pfx}_summary.json", "application/json", use_container_width=True,
+        help="Сводка метрик и параметров в формате JSON",
     )
     d2.download_button(
         "📊 trades.csv", export_analysis_to_csv_bytes(trades_df),
         f"{pfx}_trades.csv", "text/csv", use_container_width=True,
+        help="Все сделки с ценами входа/выхода, PnL и причиной закрытия",
     )
     d3.download_button(
         "📈 equity.csv", export_analysis_to_csv_bytes(equity_df),
         f"{pfx}_equity.csv", "text/csv", use_container_width=True,
+        help="Кривая капитала: equity по каждому бару",
     )
     d4.download_button(
         "🤖 analysis_pack.json", export_analysis_to_json_bytes(pack),
         f"{pfx}_analysis_pack.json", "application/json", use_container_width=True,
+        help="Полный пакет для AI-анализа: метрики + сделки + equity в одном JSON",
     )
 
 
@@ -758,26 +812,17 @@ with st.sidebar:
         5. **Запуск** *(центр)* — нажать ▶️ Запустить бэктест
         """)
 
+
     with st.expander("📊 Расшифровка метрик"):
         st.markdown("""
-        | Метрика | Хорошее значение |
-        |---------|-----------------|
-        | **Общая доходность** | > +20% |
-        | **Макс. просадка** | < -20% |
-        | **Коэф. Шарпа** | > 1.0 |
-        | **Профит-фактор** | > 1.5 |
-        | **% выигрышных** | > 50% |
-        """)
-
-    with st.expander("🎯 Стратегии"):
-        st.markdown("""
-        🔵 **SMA / EMA Crossover** — пересечение скользящих\n
-        🟢 **RSI** — возврат из перепроданности\n
-        🟡 **MACD** — пересечение MACD/сигнала\n
-        🔴 **Bollinger / Stoch+EMA / VWAP** — скальп M15\n
-        🟣 **Turtle Soup** — ложный пробой минимума\n
-        🟣 **80-20 по Рашке** — бар разворота\n
-        🆕 **Своя** — загрузи .py с классом BaseStrategy
+        | Метрика | Хорошее значение | Ориентир |
+        |---------|-----------------|----------|
+        | **Общая доходность** | > +20% | выше Buy&Hold |
+        | **Макс. просадка** | > -20% | < половины дохода |
+        | **Коэф. Шарпа** | > 1.0 | > 2 = отлично |
+        | **Profit Factor** | > 1.5 | > 2 = очень хорошо |
+        | **Win Rate** | > 50% | зависит от R:R |
+        | **Expectancy** | > 0% | чем выше — тем лучше |
         """)
 
     with st.expander("📝 Формат своей стратегии"):
@@ -871,6 +916,57 @@ class MyStrategy(BaseStrategy):
         Приоритет: `SL → Trail → TP → Hold Bars → Сигнал`
         """)
 
+    with st.expander("📚  Глоссарий терминов"):
+        st.markdown("""
+| Термин | Значение |
+|--------|----------|
+| **OHLCV** | Open / High / Low / Close / Volume — стандартные данные бара |
+| **Бар / Свеча** | Единица времени на графике (1H = 1 час, 1D = 1 день) |
+| **Таймфрейм** | Длительность одного бара: 15M, 1H, 4H, 1D и т.д. |
+| **Сигнал** | 1 = вход в лонг, -1 = выход, 0 = ничего |
+| **Лонг** | Позиция «в покупку» — зарабатываем на росте цены |
+| **Капитал** | Виртуальный портфель в USDT, меняется с каждой сделкой |
+| **Комиссия** | % от суммы сделки, списывается за вход и выход |
+| **Проскальзывание** | Разница между ценой сигнала и ценой исполнения |
+| **Стоп-лосс (SL)** | Уровень ниже входа для ограничения убытка |
+| **Тейк-профит (TP)** | Уровень выше входа для фиксации прибыли |
+| **Трейлинг-стоп** | Подтягивающийся SL: следует за максимумом цены |
+| **Hold Bars** | Принудительный выход через N баров после входа |
+| **Sharpe Ratio** | Доход / Риск (стд. отклонение). >1 = хорошо, >2 = отлично |
+| **Sortino Ratio** | Аналог Sharpe, но учитывает только отрицательную волатильность |
+| **Profit Factor** | Валовая прибыль / Валовый убыток. >1.5 = хорошо |
+| **Win Rate** | % прибыльных сделок от общего числа |
+| **Expectancy** | Ожидаемый % PnL с одной сделки. Должна быть > 0 |
+| **Max Drawdown** | Макс. падение капитала от пика. Чем меньше %, тем лучше |
+| **Buy & Hold** | Бенчмарк: купить на старте, держать до конца периода |
+| **IS / OOS** | In-Sample (обучение) / Out-of-Sample (тест) в Walk-Forward |
+| **Robustness** | Коэф. устойчивости OOS/IS. ≥ 0.7 = стратегия не переобучена |
+| **CLI** | Командная строка — запуск бэктеста без UI через терминал |
+| **BaseStrategy** | Базовый класс для своих стратегий в этой системе |
+        """)
+
+    with st.expander("🎯 Стратегии по категориям"):
+        st.markdown("""
+**📈 Тренд** — работают когда рынок направленно движется\n
+· SMA Crossover — пересечение простых MA\n
+· EMA Crossover — то же, но с экспоненциальными MA
+
+**🔄 Возврат к среднему** — расчёт на коррекцию после перепроданности\n
+· RSI Mean Reversion — вход когда RSI < порога\n
+· MACD Momentum — пересечение MACD линий
+
+**⚡ Скальпинг (M15–1H)** — быстрые сделки на волатильности\n
+· Bollinger Scalp — отскок от нижней полосы BB\n
+· Stochastic + EMA Scalp — стохастик + тренд-фильтр\n
+· VWAP Bounce — отскок от объёмного уровня
+
+**🔃 Контртренд / Разворот**\n
+· Turtle Soup — ложный пробой N-барового минимума\n
+· 80-20 по Рашке — бар разворота настроения\n
+
+🆕 **Своя** — загрузи .py с классом BaseStrategy
+        """)
+
     st.divider()
 
     # ── 🔑 API ключи бирж ────────────────────────────────────────────────────
@@ -947,11 +1043,20 @@ st.subheader("📅  Период и таймфрейм")
 
 pt1, pt2, pt3, pt4 = st.columns([1.2, 1.2, 0.8, 1.8])
 with pt1:
-    start_date = st.date_input("Дата начала", value=pd.Timestamp("2026-01-01"))
+    start_date = st.date_input(
+        "Дата начала", value=pd.Timestamp("2026-01-01"),
+        help="Начало периода тестирования. Данные загружаются с этой даты.",
+    )
 with pt2:
-    end_date = st.date_input("Дата окончания", value=pd.Timestamp("2026-06-22"))
+    end_date = st.date_input(
+        "Дата окончания", value=pd.Timestamp("2026-06-22"),
+        help="Конец периода тестирования. Чем дольше период — тем надёжнее результат.",
+    )
 with pt3:
-    timeframe = st.selectbox("Таймфрейм", ["15m", "1m", "5m", "30m", "1h", "4h", "1d"])
+    timeframe = st.selectbox(
+        "Таймфрейм", ["15m", "1m", "5m", "30m", "1h", "4h", "1d"],
+        help="Длительность одного бара. 15m = 15 минут, 1h = час, 1d = день. Влияет на число баров.",
+    )
 with pt4:
     _dates_ok = end_date >= start_date
     if _dates_ok:
@@ -974,46 +1079,109 @@ with left_col:
     st.subheader("🎯  Стратегия")
 
     STRATEGY_LABELS_RU: dict[str, str] = {
-        "sma_cross":      "SMA Crossover (тренд)",
-        "ema_cross":      "EMA Crossover (тренд)",
-        "rsi":            "RSI Mean Reversion (возврат)",
-        "macd":           "MACD Momentum (моментум)",
-        "bollinger_scalp": "Bollinger Scalp — M15",
-        "stoch_ema_scalp": "Stochastic + EMA Scalp — M15",
-        "vwap_bounce":    "VWAP Bounce Scalp — M15",
-        "turtle_soup":    "Turtle Soup (контртренд)",
-        "raschke_80_20":  "80-20 по Рашке (разворот)",
+        "sma_cross":       "SMA Crossover",
+        "ema_cross":       "EMA Crossover",
+        "rsi":             "RSI Mean Reversion",
+        "macd":            "MACD Momentum",
+        "bollinger_scalp": "Bollinger Scalp",
+        "stoch_ema_scalp": "Stochastic + EMA Scalp",
+        "vwap_bounce":     "VWAP Bounce",
+        "turtle_soup":     "Turtle Soup",
+        "raschke_80_20":   "80-20 по Рашке",
+    }
+    STRATEGY_CATEGORIES_MAP: dict[str, str] = {
+        "sma_cross":       "📈 Тренд",
+        "ema_cross":       "📈 Тренд",
+        "rsi":             "🔄 Возврат к среднему",
+        "macd":            "🔄 Возврат к среднему",
+        "bollinger_scalp": "⚡ Скальпинг",
+        "stoch_ema_scalp": "⚡ Скальпинг",
+        "vwap_bounce":     "⚡ Скальпинг",
+        "turtle_soup":     "🔃 Контртренд",
+        "raschke_80_20":   "🔃 Контртренд",
+    }
+    STRATEGY_TIMEFRAMES_REC: dict[str, str] = {
+        "sma_cross":       "1H · 4H · 1D",
+        "ema_cross":       "1H · 4H · 1D",
+        "rsi":             "1H · 4H",
+        "macd":            "1H · 4H",
+        "bollinger_scalp": "15M · 1H",
+        "stoch_ema_scalp": "15M",
+        "vwap_bounce":     "15M · 1H",
+        "turtle_soup":     "4H · 1D",
+        "raschke_80_20":   "1H · 4H",
+    }
+    STRATEGY_DESC_FULL: dict[str, str] = {
+        "sma_cross":       "Покупает при пересечении быстрой SMA вверх через медленную. Продаёт при обратном. Эффективна на трендовых рынках, даёт ложные сигналы в боковике.",
+        "ema_cross":       "Аналог SMA Crossover с экспоненциальными MA. EMA придаёт больший вес последним ценам — реагирует быстрее, меньше запаздывания.",
+        "rsi":             "Вход, когда RSI опускается ниже порога перепроданности. Расчёт на возврат к среднему. Риск «ловли ножей» на трендовых падениях.",
+        "macd":            "Вход при пересечении MACD своей сигнальной линии снизу вверх. Lagging-индикатор: сигналы запаздывают, работает в направленных рынках.",
+        "bollinger_scalp": "Покупает, когда цена касается нижней полосы Боллинджера, рассчитывая на возврат к средней. Оптимален на M15.",
+        "stoch_ema_scalp": "Stochastic в зоне перепроданности + цена выше EMA(50). Комбинирует моментум и тренд-фильтр. Оптимален на M15.",
+        "vwap_bounce":     "Вход при отклонении ниже VWAP на заданный %. VWAP — точка притяжения институциональных объёмов. M15–1H.",
+        "turtle_soup":     "Ловит ложный пробой N-барового минимума: цена уходит ниже, затем возвращается — «медвежья ловушка». 4H–1D.",
+        "raschke_80_20":   "Паттерн Линды Рашке: бар открывается в нижних 20% диапазона и закрывается в верхних 20% — разворотный сигнал смены настроения. 1H–4H.",
     }
     for _cn in st.session_state.custom_strategies:
         STRATEGY_LABELS_RU[f"custom__{_cn}"] = f"🆕 {_cn}"
+        STRATEGY_CATEGORIES_MAP[f"custom__{_cn}"] = "🆕 Своя"
+
+    # Category filter (pills)
+    _cat_all_opts = ["Все", "📈 Тренд", "🔄 Возврат к среднему", "⚡ Скальпинг", "🔃 Контртренд"]
+    if st.session_state.custom_strategies:
+        _cat_all_opts.append("🆕 Своя")
+    _strat_cat = st.pills(
+        "Категория", _cat_all_opts, default="Все", key="strat_cat_pills",
+        help="Фильтр по типу стратегии",
+    )
+
+    # Filter strategies by category
+    _filtered_keys = [
+        k for k, v in STRATEGY_LABELS_RU.items()
+        if _strat_cat == "Все" or STRATEGY_CATEGORIES_MAP.get(k) == _strat_cat
+    ]
+    if not _filtered_keys:
+        _filtered_keys = list(STRATEGY_LABELS_RU.keys())
 
     strategy_label_to_key = {v: k for k, v in STRATEGY_LABELS_RU.items()}
-    _labels_list = list(STRATEGY_LABELS_RU.values())
-    _keys_list = list(STRATEGY_LABELS_RU.keys())
+    _labels_list = [STRATEGY_LABELS_RU[k] for k in _filtered_keys]
     _saved_key = st.session_state.get("selected_strategy", "sma_cross")
-    if _saved_key not in STRATEGY_LABELS_RU:
-        _saved_key = "sma_cross"
+    if _saved_key not in _filtered_keys:
+        _saved_key = _filtered_keys[0]
     selected_label = st.selectbox(
-        "Выберите стратегию", _labels_list, index=_keys_list.index(_saved_key)
+        "Стратегия",
+        _labels_list,
+        index=_filtered_keys.index(_saved_key),
+        help="Выберите торговую стратегию из списка",
     )
     selected_key = strategy_label_to_key[selected_label]
     st.session_state.selected_strategy = selected_key
 
-    STRATEGY_CAPTIONS_RU: dict[str, str] = {
-        "sma_cross":      "Трендовая — покупка при пересечении быстрой MA вверх.",
-        "ema_cross":      "Трендовая — то же что SMA, EMA быстрее реагирует.",
-        "rsi":            "Возврат к среднему — вход при RSI < порога перепроданности.",
-        "macd":           "Моментум — пересечение линии MACD и сигнальной.",
-        "bollinger_scalp": "Скальп M15 — отскок от нижней полосы Боллинджера.",
-        "stoch_ema_scalp": "Скальп M15 — стохастик в перепроданности + тренд EMA(50).",
-        "vwap_bounce":    "Скальп M15 — отскок от нижней полосы VWAP.",
-        "turtle_soup":    "Контртренд — ловля ложного пробоя N-барового минимума.",
-        "raschke_80_20":  "Разворот — вход после бара: открытие внизу, закрытие вверху.",
-    }
-    for _cn, _ci in st.session_state.custom_strategies.items():
-        _cd = getattr(_ci.get("cls"), "description", "") or ""
-        STRATEGY_CAPTIONS_RU[f"custom__{_cn}"] = f"Своя: {_cn}" + (f" — {_cd}" if _cd else "")
-    st.caption(STRATEGY_CAPTIONS_RU.get(selected_key, ""))
+    # Description card
+    _cat_badge = STRATEGY_CATEGORIES_MAP.get(selected_key, "")
+    _tf_rec = STRATEGY_TIMEFRAMES_REC.get(selected_key, "")
+    _desc_full = STRATEGY_DESC_FULL.get(selected_key, "")
+    if selected_key.startswith("custom__"):
+        _cn_desc = selected_key[8:]
+        _ci_desc = st.session_state.custom_strategies.get(_cn_desc, {})
+        _desc_full = getattr(_ci_desc.get("cls"), "description", "") or "Пользовательская стратегия"
+        _tf_rec = "Любой"
+    if _desc_full:
+        _tf_html = (
+            f"<span style='background:#0d3349;color:#42a5f5;border-radius:4px;padding:2px 7px;"
+            f"font-size:11px;font-weight:600;margin-left:6px;'>⏱ {_tf_rec}</span>"
+        ) if _tf_rec else ""
+        _cat_html = (
+            f"<span style='font-size:11px;color:#aaa;'>{_cat_badge}</span>"
+        ) if _cat_badge else ""
+        st.markdown(
+            f"<div style='background:#0d1117;border:1px solid #21262d;border-radius:8px;"
+            f"padding:10px 14px;margin:6px 0 10px;'>"
+            f"<div style='margin-bottom:4px;'>{_cat_html}{_tf_html}</div>"
+            f"<span style='font-size:13px;color:#c9d1d9;line-height:1.5;'>{_desc_full}</span>"
+            f"</div>",
+            unsafe_allow_html=True,
+        )
 
     # Динамические параметры стратегии
     strategy_params: dict = {}
@@ -1131,15 +1299,42 @@ with left_col:
             st.divider()
 
         st.caption(
-            "Загрузите .py файл или вставьте код. "
+            "Загрузите один или несколько .py файлов или вставьте код. "
             "Класс должен наследовать `BaseStrategy` и реализовывать `generate_signals(df)`."
         )
 
-        _upload = st.file_uploader("Загрузить .py файл", type=["py"], key="strategy_uploader")
-        if _upload is not None:
-            _uploaded_code = _upload.read().decode("utf-8")
-            st.session_state.custom_code = _uploaded_code
-            _log(f"Файл загружен: {_upload.name}")
+        _uploads = st.file_uploader(
+            "Загрузить .py файл(ы)",
+            type=["py"],
+            key="strategy_uploader",
+            accept_multiple_files=True,
+            help="Можно выбрать сразу несколько файлов — каждый будет загружен как отдельная стратегия.",
+        )
+        if _uploads:
+            if len(_uploads) > 1:
+                # Batch mode: auto-import all files directly
+                _batch_ok = 0
+                for _upload in _uploads:
+                    _up_code = _upload.read().decode("utf-8")
+                    try:
+                        _cls_b, _params_b = _load_custom_strategy(_up_code)
+                        st.session_state.custom_strategies[_cls_b.__name__] = {
+                            "cls": _cls_b, "params": _params_b, "code": _up_code,
+                        }
+                        _save_user_strategy(_cls_b.__name__, _up_code)
+                        st.session_state.selected_strategy = f"custom__{_cls_b.__name__}"
+                        _log(f"Загружена: {_cls_b.__name__}  ({_upload.name})")
+                        _batch_ok += 1
+                    except Exception as _be:
+                        st.error(f"❌ {_upload.name}: {_be}")
+                if _batch_ok:
+                    st.success(f"✅  Пакетная загрузка: {_batch_ok} стратегий добавлено")
+                    st.rerun()
+            else:
+                # Single file: load into editor for preview
+                _up_code_single = _uploads[0].read().decode("utf-8")
+                st.session_state.custom_code = _up_code_single
+                _log(f"Файл загружен: {_uploads[0].name}")
 
         _code_input = st.text_area(
             "Код стратегии",
@@ -1264,16 +1459,28 @@ with center_col:
     cc1, cc2 = st.columns(2)
     with cc1:
         initial_capital = st.number_input(
-            "Начальный капитал (USDT)", 100, 10_000_000, 10_000, step=500
+            "Начальный капитал (USDT)", 100, 10_000_000, 10_000, step=500,
+            help="Стартовый баланс портфеля в USDT. На него умножается % позиции.",
         )
     with cc2:
-        fee_pct = st.number_input("Комиссия (%)", 0.0, 5.0, 0.1, step=0.01, format="%.3f")
+        fee_pct = st.number_input(
+            "Комиссия (%)", 0.0, 5.0, 0.1, step=0.01, format="%.3f",
+            help="Комиссия биржи за вход + выход (0.1% = 0.001). Списывается с каждой сделки.",
+        )
 
     slippage_pct = st.number_input(
-        "Проскальзывание (%)", 0.0, 5.0, 0.05, step=0.01, format="%.3f"
+        "Проскальзывание (%)", 0.0, 5.0, 0.05, step=0.01, format="%.3f",
+        help="Разница между ожидаемой и фактической ценой исполнения. Имитирует спред и задержку.",
     )
-    st.selectbox("Метод расчёта позиции", ["% от капитала", "Фиксированный", "На основе риска"])
-    st.text_input("Исполнение", value="Маркет-ордер по открытию следующего бара", disabled=True)
+    st.selectbox(
+        "Метод расчёта позиции",
+        ["% от капитала", "Фиксированный", "На основе риска"],
+        help="% от капитала — каждая сделка занимает фиксированный процент текущего баланса.",
+    )
+    st.text_input(
+        "Исполнение", value="Маркет-ордер по открытию следующего бара", disabled=True,
+        help="Сигнал фиксируется на закрытии бара i. Исполнение — по open бара i+1 (нет look-ahead).",
+    )
 
     st.divider()
 
@@ -1491,15 +1698,23 @@ with center_col:
 
     # ── Предпросмотр команды CLI ──────────────────────────────────────────────
     st.divider()
-    st.subheader("💻  Команда CLI")
+    st.subheader(
+        "💻  Команда CLI",
+        help=(
+            "Команда для запуска того же бэктеста из терминала (командной строки) "
+            "без UI. Полезна для автоматизации, CI/CD и массовых тестов. "
+            "Скопируйте команду и выполните в корне проекта."
+        ),
+    )
     if st.session_state.command_preview:
         st.code(st.session_state.command_preview, language="bash")
+        st.caption("Запускать из корня репозитория: `cd /path/to/project && python -m backtesting.run_strategy …`")
     else:
         st.markdown(
-            "<div style='background:#0d1117;border:1px solid #30363d;border-radius:6px;"
-            "padding:14px;font-family:monospace;font-size:12px;color:#8b949e;'>"
+            "<div style='background:#0d1117;border:1px solid #21262d;border-radius:8px;"
+            "padding:14px 16px;font-family:monospace;font-size:12px;color:#8b949e;'>"
             "$ <span style='color:#3fb950'>ожидание конфигурации…</span><br>"
-            "&gt; нажмите 📋 Подготовить команду CLI</div>",
+            "<span style='color:#555;'>→ нажмите 📋 Подготовить команду CLI</span></div>",
             unsafe_allow_html=True,
         )
 
