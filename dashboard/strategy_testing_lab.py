@@ -735,11 +735,10 @@ class MyStrategy(BaseStrategy):
 
     with st.expander("🛑 Параметры выхода"):
         st.markdown("""
-        **Стоп-лосс** — фиксированный, по low свечи.\n
-        **Тейк-профит** — фиксированная цель, по high свечи.\n
-        **Трейлинг-стоп** — X% ниже пикового high с момента входа.
-        Подтягивается вверх автоматически.\n
-        Приоритет: `SL → Trail → TP → Сигнал`
+        **Стоп-лосс** — фиксированный. Срабатывает если открытие следующего бара ≤ SL уровня.\n
+        **Тейк-профит** — фиксированная цель. Срабатывает если открытие ≥ TP уровня.\n
+        **Hold Bars** — принудительное закрытие через N баров после входа.\n
+        Приоритет: `SL → TP → Hold Bars → Сигнал`
         """)
 
     st.divider()
@@ -1101,17 +1100,9 @@ with left_col:
 
     if data_mode == "Синтетические данные":
         st.caption(
-            f"Синтетические OHLCV · **{timeframe}** · **{_n_bars:,} баров**"
+            f"Синтетические OHLCV · **{timeframe}** · **{_n_bars:,} баров** — данные сгенерируются при запуске бэктеста"
             if _dates_ok else "Исправьте диапазон дат выше."
         )
-        if st.button("⚡  Сгенерировать данные", use_container_width=True, disabled=not _dates_ok):
-            df_loaded = generate_sample_ohlcv(n_bars=_n_bars, start=str(start_date), freq=timeframe)
-            st.session_state.df = df_loaded
-            st.session_state.data_label = f"Синтетика BTC/USDT {timeframe} — {_n_bars:,} баров"
-            st.session_state.data_symbol = "BTC/USDT"
-            st.session_state.data_source = "synthetic"
-            st.session_state.backtest_results = None
-            _log(f"Синтетика: {_n_bars} баров, {timeframe}")
 
     elif data_mode == "Загрузить CSV":
         st.caption("Колонки: timestamp, open, high, low, close, volume")
@@ -1143,39 +1134,7 @@ with left_col:
             st.info("📌 Публичный режим — API ключ не нужен")
 
         if _dates_ok:
-            st.caption(f"Будет загружено ~{_n_bars:,} баров ({timeframe}) постранично.")
-
-        if st.button("📥  Загрузить с биржи", use_container_width=True, disabled=not _dates_ok):
-            _progress_bar = st.progress(0, text="Подключение к бирже…")
-            _status = st.empty()
-            try:
-                dm = DataManager()
-
-                def _on_progress(fetched: int, total: int) -> None:
-                    pct = min(fetched / max(total, 1), 1.0)
-                    _progress_bar.progress(pct, text=f"Загружено {fetched:,} / {total:,} баров…")
-
-                df_loaded = dm.load_from_exchange_all(
-                    exc_sel, sym_sel, timeframe,
-                    start=str(start_date),
-                    end=str(end_date),
-                    api_key=_api_k,
-                    api_secret=_api_s,
-                    on_progress=_on_progress,
-                )
-                _progress_bar.empty()
-                st.session_state.df = df_loaded
-                st.session_state.data_label = (
-                    f"{exc_sel.title()} {sym_sel} {timeframe} — {len(df_loaded):,} баров"
-                )
-                st.session_state.data_symbol = sym_sel
-                st.session_state.data_source = exc_sel
-                st.session_state.backtest_results = None
-                _log(f"Загружено {len(df_loaded)} баров: {exc_sel} {sym_sel} {timeframe}")
-                _status.success(f"✅  Загружено {len(df_loaded):,} баров")
-            except Exception as exc:
-                _progress_bar.empty()
-                st.error(f"Ошибка загрузки: {exc}")
+            st.caption(f"Будет загружено ~{_n_bars:,} баров ({timeframe}) постранично при запуске бэктеста.")
 
     # Статус данных
     if st.session_state.df is not None:
@@ -1215,7 +1174,7 @@ with center_col:
         "Проскальзывание (%)", 0.0, 5.0, 0.05, step=0.01, format="%.3f"
     )
     st.selectbox("Метод расчёта позиции", ["% от капитала", "Фиксированный", "На основе риска"])
-    st.text_input("Исполнение", value="Маркет-ордер по цене закрытия свечи", disabled=True)
+    st.text_input("Исполнение", value="Маркет-ордер по открытию следующего бара", disabled=True)
 
     st.divider()
 
@@ -1235,18 +1194,18 @@ with center_col:
             help="Фиксированная цель выше цены входа. По high свечи.",
         )
 
-    trailing_stop_pct = st.number_input(
-        "Трейлинг-стоп (%)", 0.0, 50.0, 0.0, step=0.1, format="%.1f",
-        help="X% ниже максимального high с момента входа. Подтягивается вверх автоматически.",
+    hold_bars = st.number_input(
+        "Удерживать (баров)", 0, 10000, 0, step=1,
+        help="Принудительно закрыть позицию через N баров после входа. 0 = выключено.",
     )
 
     _exits = []
     if stop_loss_pct > 0:
         _exits.append(f"🔴 SL {stop_loss_pct:.1f}%")
-    if trailing_stop_pct > 0:
-        _exits.append(f"🟠 Trail {trailing_stop_pct:.1f}%")
     if take_profit_pct > 0:
         _exits.append(f"🟢 TP {take_profit_pct:.1f}%")
+    if hold_bars > 0:
+        _exits.append(f"⏱ {hold_bars} баров")
     _exits.append("📊 Сигнал")
     st.caption("Приоритет: " + " → ".join(_exits))
 
@@ -1257,15 +1216,16 @@ with center_col:
 
     prepare_btn = st.button("📋  Подготовить команду CLI", use_container_width=True)
 
-    data_ready = st.session_state.df is not None
-    _run_disabled = not data_ready or not _dates_ok
+    _csv_mode = data_mode == "Загрузить CSV"
+    _csv_ready = st.session_state.df is not None
+    _run_disabled = not _dates_ok or (_csv_mode and not _csv_ready)
     run_btn = st.button(
         "▶️  Запустить бэктест",
         use_container_width=True,
         disabled=_run_disabled,
         type="primary",
         help=(
-            "Сначала загрузите данные" if not data_ready
+            "Загрузите CSV файл" if (_csv_mode and not _csv_ready)
             else "Исправьте диапазон дат" if not _dates_ok
             else "Запустить бэктест"
         ),
@@ -1298,75 +1258,120 @@ with center_col:
             cmd += f" \\\n  --stop-loss {stop_loss_pct / 100:.4f}"
         if take_profit_pct > 0:
             cmd += f" \\\n  --take-profit {take_profit_pct / 100:.4f}"
-        if trailing_stop_pct > 0:
-            cmd += f" \\\n  --trailing-stop {trailing_stop_pct / 100:.4f}"
+        if hold_bars > 0:
+            cmd += f" \\\n  --hold-bars {hold_bars}"
         for k, v in strategy_params.items():
             cmd += f" \\\n  --param {k}={v}"
         st.session_state.command_preview = cmd
         _log("CLI команда сформирована")
 
     # ── Запуск бэктеста ───────────────────────────────────────────────────────
-    if run_btn and data_ready and _dates_ok:
-        with st.spinner("Выполняется бэктест…"):
-            try:
-                df_bt = st.session_state.df.copy()
-                df_bt = df_bt[
-                    (df_bt.index >= pd.Timestamp(start_date))
-                    & (df_bt.index <= pd.Timestamp(end_date))
-                ]
-                if df_bt.empty:
-                    st.error("Нет данных в выбранном диапазоне.")
-                else:
-                    # Создаём объект стратегии
-                    if selected_key.startswith("custom__"):
-                        _cn = selected_key[8:]
-                        _ci = st.session_state.custom_strategies.get(_cn, {})
-                        if not _ci.get("cls"):
-                            raise ValueError(f"Стратегия '{_cn}' не найдена.")
-                        strategy = _ci["cls"](**strategy_params)
-                    else:
-                        strategy = get_strategy(selected_key, strategy_params)
+    if run_btn and _dates_ok:
+        _bt_df_raw: pd.DataFrame | None = None
 
-                    signals = strategy.generate_signals(df_bt)
-                    equity_curve, trades = run_backtest(
-                        df_bt, signals,
-                        initial_capital=float(initial_capital),
-                        fee=fee_pct / 100.0,
-                        slippage=slippage_pct / 100.0,
-                        stop_loss=stop_loss_pct / 100.0,
-                        take_profit=take_profit_pct / 100.0,
-                        trailing_stop=trailing_stop_pct / 100.0,
+        # 1. Load / generate data
+        if data_mode == "Синтетические данные":
+            _bt_df_raw = generate_sample_ohlcv(n_bars=_n_bars, start=str(start_date), freq=timeframe)
+            st.session_state.df = _bt_df_raw
+            st.session_state.data_label = f"Синтетика BTC/USDT {timeframe} — {_n_bars:,} баров"
+            st.session_state.data_symbol = "BTC/USDT"
+            st.session_state.data_source = "synthetic"
+            _log(f"Синтетика: {_n_bars} баров, {timeframe}")
+
+        elif data_mode == "Загрузить CSV":
+            _bt_df_raw = st.session_state.df
+
+        else:  # Получить с биржи
+            _run_pb = st.progress(0, text="Подключение к бирже…")
+            try:
+                dm = DataManager()
+                _bt_api_k, _bt_api_s = _get_api(exc_sel)
+
+                def _on_run_progress(fetched: int, total: int) -> None:
+                    _run_pb.progress(
+                        min(fetched / max(total, 1), 1.0),
+                        text=f"Загружено {fetched:,} / {total:,} баров…",
                     )
-                    metrics = calculate_metrics(equity_curve, trades, float(initial_capital))
-                    st.session_state.backtest_results = {
-                        "equity_curve": equity_curve,
-                        "trades": trades,
-                        "metrics": metrics,
-                        "strategy_label": selected_label,
-                        "strategy_key": selected_key,
-                        "strategy_params": strategy_params,
-                        "bars": len(df_bt),
-                        "symbol": st.session_state.data_symbol,
-                        "timeframe": timeframe,
-                        "source": st.session_state.data_source,
-                        "backtest_params": {
-                            "initial_capital": float(initial_capital),
-                            "commission_pct": fee_pct,
-                            "slippage_pct": slippage_pct,
-                            "position_sizing": "% от капитала",
-                            "stop_loss_pct": stop_loss_pct,
-                            "take_profit_pct": take_profit_pct,
-                            "trailing_stop_pct": trailing_stop_pct,
-                        },
-                    }
-                    _log(
-                        f"Бэктест — {selected_label}  "
-                        f"сделок: {metrics['total_trades']}  "
-                        f"доходность: {metrics['total_return']}%"
-                    )
-            except Exception as exc:
-                st.error(f"Ошибка бэктеста: {exc}")
-                _log(f"Ошибка: {exc}")
+
+                _bt_df_raw = dm.load_from_exchange_all(
+                    exc_sel, sym_sel, timeframe,
+                    start=str(start_date), end=str(end_date),
+                    api_key=_bt_api_k, api_secret=_bt_api_s,
+                    on_progress=_on_run_progress,
+                )
+                _run_pb.empty()
+                st.session_state.df = _bt_df_raw
+                st.session_state.data_label = (
+                    f"{exc_sel.title()} {sym_sel} {timeframe} — {len(_bt_df_raw):,} баров"
+                )
+                st.session_state.data_symbol = sym_sel
+                st.session_state.data_source = exc_sel
+                _log(f"Загружено {len(_bt_df_raw)} баров: {exc_sel} {sym_sel} {timeframe}")
+            except Exception as _load_exc:
+                _run_pb.empty()
+                st.error(f"Ошибка загрузки данных: {_load_exc}")
+                _log(f"Ошибка загрузки: {_load_exc}")
+
+        # 2. Run backtest on loaded data
+        if _bt_df_raw is not None:
+            with st.spinner("Выполняется бэктест…"):
+                try:
+                    df_bt = _bt_df_raw[
+                        (_bt_df_raw.index >= pd.Timestamp(start_date))
+                        & (_bt_df_raw.index <= pd.Timestamp(end_date))
+                    ]
+                    if df_bt.empty:
+                        st.error("Нет данных в выбранном диапазоне.")
+                    else:
+                        if selected_key.startswith("custom__"):
+                            _cn = selected_key[8:]
+                            _ci = st.session_state.custom_strategies.get(_cn, {})
+                            if not _ci.get("cls"):
+                                raise ValueError(f"Стратегия '{_cn}' не найдена.")
+                            strategy = _ci["cls"](**strategy_params)
+                        else:
+                            strategy = get_strategy(selected_key, strategy_params)
+
+                        signals = strategy.generate_signals(df_bt)
+                        equity_curve, trades = run_backtest(
+                            df_bt, signals,
+                            initial_capital=float(initial_capital),
+                            fee=fee_pct / 100.0,
+                            slippage=slippage_pct / 100.0,
+                            stop_loss=stop_loss_pct / 100.0,
+                            take_profit=take_profit_pct / 100.0,
+                            hold_bars=int(hold_bars),
+                        )
+                        metrics = calculate_metrics(equity_curve, trades, float(initial_capital))
+                        st.session_state.backtest_results = {
+                            "equity_curve": equity_curve,
+                            "trades": trades,
+                            "metrics": metrics,
+                            "strategy_label": selected_label,
+                            "strategy_key": selected_key,
+                            "strategy_params": strategy_params,
+                            "bars": len(df_bt),
+                            "symbol": st.session_state.data_symbol,
+                            "timeframe": timeframe,
+                            "source": st.session_state.data_source,
+                            "backtest_params": {
+                                "initial_capital": float(initial_capital),
+                                "commission_pct": fee_pct,
+                                "slippage_pct": slippage_pct,
+                                "position_sizing": "% от капитала",
+                                "stop_loss_pct": stop_loss_pct,
+                                "take_profit_pct": take_profit_pct,
+                                "hold_bars": int(hold_bars),
+                            },
+                        }
+                        _log(
+                            f"Бэктест — {selected_label}  "
+                            f"сделок: {metrics['total_trades']}  "
+                            f"доходность: {metrics['total_return']}%"
+                        )
+                except Exception as exc:
+                    st.error(f"Ошибка бэктеста: {exc}")
+                    _log(f"Ошибка: {exc}")
 
     # ── Предпросмотр команды CLI ──────────────────────────────────────────────
     st.divider()
@@ -1411,6 +1416,8 @@ with right_col:
             ("Всего сделок", str(m["total_trades"]), "default"),
             ("Ср. доход/сделка", f"{m['avg_trade_return']:+.2f}%",
              "green" if m["avg_trade_return"] >= 0 else "red"),
+            ("Expectancy", f"{m.get('expectancy_pct', 0):+.3f}%",
+             "green" if m.get("expectancy_pct", 0) >= 0 else "red"),
             ("Итог капитал", f"${m['final_equity']:,.2f}", "default"),
         ]
         colour_map = {"green": "#4caf50", "red": "#f44336", "orange": "#ff9800", "default": "#aaaaaa"}
@@ -1482,8 +1489,8 @@ if st.session_state.backtest_results:
         _reason_labels = {
             "signal":        "📊 Сигнал",
             "stop_loss":     "🔴 Стоп-лосс",
-            "trailing_stop": "🟠 Трейлинг",
             "take_profit":   "🟢 Тейк-профит",
+            "hold_bars":     "⏱ Hold Bars",
             "end_of_data":   "⏹ Конец данных",
             "":              "—",
         }
@@ -1852,7 +1859,7 @@ with st.expander("🛡️  Режим работы", expanded=False):
             "- ✅ Загрузка CSV / Биржа\n"
             "- ✅ Скачать данные CSV\n"
             "- ✅ Бэктест 9 стратегий + свои\n"
-            "- ✅ SL / TP / Трейлинг-стоп\n"
+            "- ✅ SL / TP / Hold Bars\n"
             "- ✅ API ключи (Read Only)\n"
             "- ✅ Бумажная торговля\n"
             "- ✅ Оптимизация параметров"

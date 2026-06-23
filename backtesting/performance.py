@@ -41,19 +41,29 @@ def calculate_metrics(
     win_rate = 0.0
     profit_factor: float | str = 0.0
     avg_trade_return = 0.0
+    expectancy_pct = 0.0
 
     if n_trades > 0:
-        pnls = [t.pnl for t in closed]
-        winners = [p for p in pnls if p > 0]
-        losers = [p for p in pnls if p <= 0]
+        pnls     = [t.pnl     for t in closed]
+        pnl_pcts = [t.pnl_pct for t in closed]
 
-        win_rate = len(winners) / n_trades * 100.0
+        winners     = [p for p in pnls     if p > 0]
+        losers      = [p for p in pnls     if p <= 0]
+        win_pcts    = [p for p in pnl_pcts if p > 0]
+        loss_pcts   = [p for p in pnl_pcts if p <= 0]
+
+        win_rate    = len(winners) / n_trades * 100.0
         gross_profit = sum(winners) if winners else 0.0
-        gross_loss = abs(sum(losers)) if losers else 0.0
+        gross_loss   = abs(sum(losers)) if losers else 0.0
         profit_factor = (
             round(gross_profit / gross_loss, 3) if gross_loss > 0 else float("inf")
         )
-        avg_trade_return = float(np.mean([t.pnl_pct for t in closed]))
+        avg_trade_return = float(np.mean(pnl_pcts))
+
+        wr_frac      = len(win_pcts) / n_trades
+        avg_win_pct  = float(np.mean(win_pcts))  if win_pcts  else 0.0
+        avg_loss_pct = float(np.mean(loss_pcts)) if loss_pcts else 0.0
+        expectancy_pct = wr_frac * avg_win_pct + (1.0 - wr_frac) * avg_loss_pct
 
     return {
         "total_return": round(total_return_pct, 2),
@@ -64,5 +74,6 @@ def calculate_metrics(
         "win_rate": round(win_rate, 2),
         "total_trades": n_trades,
         "avg_trade_return": round(avg_trade_return, 3),
+        "expectancy_pct":   round(expectancy_pct, 3),
         "final_equity": round(final_equity, 2),
     }
