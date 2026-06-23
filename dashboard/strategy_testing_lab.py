@@ -644,6 +644,105 @@ def export_analysis_render_downloads(res: dict, df_source: pd.DataFrame) -> None
 
 _load_all_user_strategies()
 
+
+# ─── AI ОЦЕНКА СТРАТЕГИИ (офлайн, rule-based) ─────────────────────────────────
+
+def _ai_eval_strategy(metrics: dict) -> dict:
+    """Compute an offline rule-based verdict (A/B/C/D) + written evaluation."""
+    ret    = float(metrics.get("total_return",     0) or 0)
+    dd     = float(metrics.get("max_drawdown",     0) or 0)
+    sharpe = float(metrics.get("sharpe_ratio",     0) or 0)
+    pf_raw = metrics.get("profit_factor", 0)
+    pf     = 99.0 if str(pf_raw) == "∞" else float(pf_raw or 0)
+    wr     = float(metrics.get("win_rate",         0) or 0)
+    trades = int(metrics.get("total_trades",       0) or 0)
+    exp    = float(metrics.get("expectancy_pct",   0) or 0)
+    sharpe = float(metrics.get("sharpe_ratio",     0) or 0)
+
+    goods: list[str] = []
+    bads:  list[str] = []
+
+    if ret > 20:        goods.append(f"Высокая доходность {ret:+.1f}%")
+    elif ret > 5:       goods.append(f"Положительная доходность {ret:+.1f}%")
+    if sharpe > 1.5:    goods.append(f"Отличный коэф. Шарпа {sharpe:.2f}")
+    elif sharpe > 1.0:  goods.append(f"Хороший коэф. Шарпа {sharpe:.2f}")
+    if pf > 2.0:        goods.append(f"Высокий профит-фактор {pf:.2f}")
+    elif pf > 1.5:      goods.append(f"Хороший профит-фактор {pf:.2f}")
+    if wr > 60:         goods.append(f"Высокий % побед {wr:.1f}%")
+    elif wr > 50:       goods.append(f"Больше половины сделок прибыльны {wr:.1f}%")
+    if dd > -10:        goods.append(f"Низкая просадка {dd:.1f}%")
+    elif dd > -20:      goods.append(f"Умеренная просадка {dd:.1f}%")
+    if exp > 0.5:       goods.append(f"Положительное матожидание {exp:+.2f}%")
+    if trades >= 50:    goods.append(f"Хорошая статистическая база ({trades} сделок)")
+    elif trades >= 20:  goods.append(f"Достаточно сделок для оценки ({trades})")
+
+    if ret < 0:         bads.append(f"Отрицательная доходность {ret:+.1f}%")
+    elif ret < 5:       bads.append(f"Очень низкая доходность {ret:+.1f}%")
+    if sharpe < 0:      bads.append(f"Отрицательный коэф. Шарпа {sharpe:.2f}")
+    elif sharpe < 0.5:  bads.append(f"Низкий коэф. Шарпа {sharpe:.2f}")
+    if pf < 1.0:        bads.append(f"Профит-фактор < 1 ({pf:.2f}) — стратегия убыточна в сумме")
+    elif pf < 1.2:      bads.append(f"Низкий профит-фактор {pf:.2f}")
+    if wr < 40:         bads.append(f"Низкий % побед {wr:.1f}%")
+    if dd < -30:        bads.append(f"Критически большая просадка {dd:.1f}%")
+    elif dd < -20:      bads.append(f"Значительная просадка {dd:.1f}%")
+    if trades < 10:     bads.append(f"Слишком мало сделок ({trades}) — статистика ненадёжна")
+    elif trades < 20:   bads.append(f"Мало сделок ({trades}) — нужно больше для уверенности")
+    if exp < 0:         bads.append(f"Отрицательное матожидание {exp:+.2f}%")
+
+    # Score
+    score = 0
+    if ret > 20:      score += 2
+    elif ret > 5:     score += 1
+    if sharpe > 1.5:  score += 2
+    elif sharpe > 1.0: score += 1
+    if pf > 2.0:      score += 2
+    elif pf > 1.5:    score += 1
+    if wr > 55:       score += 1
+    if dd > -15:      score += 2
+    elif dd > -25:    score += 1
+    if trades >= 30:  score += 1
+
+    if score >= 9:   grade, g_col, g_text = "A", "#4caf50", "Отличная стратегия"
+    elif score >= 6: grade, g_col, g_text = "B", "#8bc34a", "Хорошая стратегия"
+    elif score >= 3: grade, g_col, g_text = "C", "#ff9800", "Слабая стратегия"
+    else:            grade, g_col, g_text = "D", "#f44336", "Нежизнеспособная стратегия"
+
+    # Main problem
+    if pf < 1.0:
+        problem = "Профит-фактор < 1 — стратегия теряет деньги в сумме. Переработайте логику входа или добавьте фильтры тренда."
+    elif trades < 10:
+        problem = "Слишком мало сделок — любые выводы статистически ненадёжны. Увеличьте период данных."
+    elif dd < -30:
+        problem = f"Просадка {dd:.1f}% слишком велика для реального применения. Добавьте SL 3–5%."
+    elif sharpe < 0.5 and ret > 0:
+        problem = "Низкий Шарп — стратегия зарабатывает, но с избыточным риском. Сократите размер позиции или добавьте фильтры."
+    elif ret < 0:
+        problem = "Стратегия убыточна. Проверьте логику сигналов и попробуйте другой таймфрейм."
+    elif exp < 0:
+        problem = "Отрицательное матожидание — средний убыток превышает среднюю прибыль. Добавьте тейк-профит."
+    else:
+        problem = "Явных критичных проблем нет. Проверьте робастность на разных периодах и инструментах."
+
+    # Next test
+    if trades < 10:
+        next_test = "Запустите на большем периоде данных (минимум 100+ сделок для надёжных выводов)."
+    elif pf < 1.2:
+        next_test = "Добавьте трейлинг-стоп 3–5% и тейк-профит 5–10% — это улучшит профит-фактор."
+    elif dd < -25:
+        next_test = "Добавьте стоп-лосс 2–5% для ограничения просадки. Используйте раздел «Параметры выхода»."
+    elif wr < 45:
+        next_test = "Запустите оптимизацию параметров по «Профит-фактор» — найдите комбинацию с лучшим win rate."
+    elif sharpe < 1.0:
+        next_test = "Запустите оптимизацию по «Шарп» — цель Шарп > 1."
+    else:
+        next_test = "Протестируйте на другом периоде / торговой паре для проверки робастности результатов."
+
+    return {
+        "grade": grade, "grade_color": g_col, "grade_text": g_text,
+        "score": score, "goods": goods, "bads": bads,
+        "problem": problem, "next_test": next_test,
+    }
+
 # ─── БОКОВАЯ ПАНЕЛЬ: ПОЛНАЯ ИНСТРУКЦИЯ ────────────────────────────────────────
 with st.sidebar:
     st.markdown("# 📖 Инструкция")
@@ -1533,6 +1632,87 @@ if st.session_state.backtest_results:
     if st.session_state.df is not None:
         export_analysis_render_downloads(res, st.session_state.df)
 
+    # ── AI Оценка ─────────────────────────────────────────────────────────────
+    st.divider()
+    st.subheader("🤖  AI Оценка стратегии")
+    st.caption("Автоматический анализ по метрикам — работает офлайн, без внешних API.")
+
+    _eval = _ai_eval_strategy(res["metrics"])
+
+    _ev_grade_col, _ev_details_col = st.columns([1, 2.5])
+
+    with _ev_grade_col:
+        st.markdown(
+            f"<div style='text-align:center;padding:16px 8px;background:#161b22;"
+            f"border:2px solid {_eval['grade_color']};border-radius:12px;'>"
+            f"<div style='font-size:64px;font-weight:900;color:{_eval['grade_color']};line-height:1;'>"
+            f"{_eval['grade']}</div>"
+            f"<div style='font-size:13px;color:{_eval['grade_color']};margin-top:6px;font-weight:600;'>"
+            f"{_eval['grade_text']}</div>"
+            f"<div style='font-size:11px;color:#666;margin-top:4px;'>счёт {_eval['score']}/11</div>"
+            f"</div>",
+            unsafe_allow_html=True,
+        )
+
+    with _ev_details_col:
+        if _eval["goods"]:
+            st.markdown("**✅ Сильные стороны**")
+            for g in _eval["goods"]:
+                st.markdown(f"<span style='color:#4caf50;font-size:13px;'>▸ {g}</span>",
+                            unsafe_allow_html=True)
+
+        if _eval["bads"]:
+            st.markdown("**❌ Слабые стороны**")
+            for b in _eval["bads"]:
+                st.markdown(f"<span style='color:#f44336;font-size:13px;'>▸ {b}</span>",
+                            unsafe_allow_html=True)
+
+        if not _eval["goods"] and not _eval["bads"]:
+            st.info("Нет данных для оценки — запустите бэктест.")
+
+    st.markdown(
+        f"<div style='background:#161b22;border-left:3px solid #ff9800;"
+        f"padding:10px 14px;border-radius:0 6px 6px 0;margin-top:10px;'>"
+        f"<span style='color:#ff9800;font-size:12px;font-weight:600;'>⚠️ ГЛАВНАЯ ПРОБЛЕМА</span><br>"
+        f"<span style='font-size:13px;'>{_eval['problem']}</span>"
+        f"</div>",
+        unsafe_allow_html=True,
+    )
+    st.markdown(
+        f"<div style='background:#161b22;border-left:3px solid #42a5f5;"
+        f"padding:10px 14px;border-radius:0 6px 6px 0;margin-top:8px;'>"
+        f"<span style='color:#42a5f5;font-size:12px;font-weight:600;'>🔬 СЛЕДУЮЩИЙ ТЕСТ</span><br>"
+        f"<span style='font-size:13px;'>{_eval['next_test']}</span>"
+        f"</div>",
+        unsafe_allow_html=True,
+    )
+
+    with st.expander("📋  Промт для внешнего AI (ChatGPT / Claude)", expanded=False):
+        _eval_prompt = (
+            f"Оцени стратегию бэктеста по следующим метрикам:\n\n"
+            f"- Стратегия: {res.get('strategy_label', '—')}\n"
+            f"- Инструмент: {res.get('symbol', '—')} {res.get('timeframe', '')}\n"
+            f"- Баров: {res.get('bars', '—')}\n\n"
+            f"**Метрики:**\n"
+            f"- Доходность: {res['metrics'].get('total_return', 0):+.2f}%\n"
+            f"- Макс. просадка: {res['metrics'].get('max_drawdown', 0):.2f}%\n"
+            f"- Шарп: {res['metrics'].get('sharpe_ratio', 0):.3f}\n"
+            f"- Сортино: {res['metrics'].get('sortino_ratio', 0):.3f}\n"
+            f"- Профит-фактор: {res['metrics'].get('profit_factor', 0)}\n"
+            f"- Win Rate: {res['metrics'].get('win_rate', 0):.1f}%\n"
+            f"- Сделок: {res['metrics'].get('total_trades', 0)}\n"
+            f"- Ср. доход/сделка: {res['metrics'].get('avg_trade_return', 0):+.3f}%\n"
+            f"- Матожидание: {res['metrics'].get('expectancy_pct', 0):+.3f}%\n"
+            f"- Итог капитал: ${res['metrics'].get('final_equity', 0):,.2f}\n\n"
+            f"Дай вывод:\n"
+            f"1. Вердикт A/B/C/D\n"
+            f"2. Что хорошо\n"
+            f"3. Что плохо\n"
+            f"4. Главная проблема\n"
+            f"5. Один следующий тест"
+        )
+        st.code(_eval_prompt, language="text")
+
 
 # ══════════════════════════════════════════════════════════════════════════════
 # БУМАЖНАЯ ТОРГОВЛЯ
@@ -1910,12 +2090,12 @@ with st.expander("🛡️  Режим работы", expanded=False):
             "- ✅ SL / TP / Трейлинг-стоп / Hold Bars\n"
             "- ✅ API ключи (Read Only)\n"
             "- ✅ Бумажная торговля\n"
-            "- ✅ Оптимизация параметров"
+            "- ✅ Оптимизация параметров\n"
+            "- ✅ AI Оценка стратегии (офлайн)"
         )
     with sf_col:
         st.markdown(
             "**В будущих версиях**\n"
             "- 🔜 Сравнение стратегий\n"
-            "- 🔜 Живая торговля\n"
-            "- 🔜 AI оценка стратегий"
+            "- 🔜 Живая торговля"
         )
