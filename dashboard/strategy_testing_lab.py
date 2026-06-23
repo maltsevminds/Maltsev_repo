@@ -61,6 +61,8 @@ _defaults: dict = {
     "pt_session": None,
     "opt_results": None,
     "opt_strategy": "sma_cross",
+    "comparison_results": None,
+    "wf_results": None,
 }
 for _k, _v in _defaults.items():
     if _k not in st.session_state:
@@ -1459,6 +1461,7 @@ with center_col:
                             "equity_curve": equity_curve,
                             "trades": trades,
                             "metrics": metrics,
+                            "df_bt": df_bt,
                             "strategy_label": selected_label,
                             "strategy_key": selected_key,
                             "strategy_params": strategy_params,
@@ -1513,6 +1516,14 @@ with right_col:
         m = res["metrics"]
         st.caption(f"{res['strategy_label']}  |  {res['bars']:,} баров")
 
+        _df_bt_metric = res.get("df_bt")
+        _bh_return_pct = None
+        if _df_bt_metric is not None and len(_df_bt_metric) >= 2:
+            _bh_p0 = float(_df_bt_metric["open"].iloc[0])
+            _bh_p1 = float(_df_bt_metric["close"].iloc[-1])
+            if _bh_p0 > 0:
+                _bh_return_pct = (_bh_p1 / _bh_p0 - 1.0) * 100.0
+
         METRIC_DEFS = [
             ("Общая доходность", f"{m['total_return']:+.2f}%",
              "green" if m["total_return"] >= 0 else "red"),
@@ -1533,6 +1544,12 @@ with right_col:
              "green" if m.get("expectancy_pct", 0) >= 0 else "red"),
             ("Итог капитал", f"${m['final_equity']:,.2f}", "default"),
         ]
+        if _bh_return_pct is not None:
+            METRIC_DEFS.append((
+                "B&H доходность",
+                f"{_bh_return_pct:+.2f}%",
+                "green" if _bh_return_pct >= 0 else "red",
+            ))
         colour_map = {"green": "#4caf50", "red": "#f44336", "orange": "#ff9800", "default": "#aaaaaa"}
         for label, value, colour in METRIC_DEFS:
             mc, vc = st.columns([1.5, 1])
@@ -1588,10 +1605,23 @@ if st.session_state.backtest_results:
             line_dash="dot", line_color="#555",
             annotation_text="Начальный капитал",
         )
+        _df_bt_chart = res.get("df_bt")
+        _bh_legend = False
+        if _df_bt_chart is not None and len(_df_bt_chart) >= 2:
+            _bh_p0 = float(_df_bt_chart["open"].iloc[0])
+            if _bh_p0 > 0:
+                _bh_qty = float(equity_curve["equity"].iloc[0]) / _bh_p0
+                _bh_eq = _df_bt_chart["close"] * _bh_qty
+                fig.add_trace(go.Scatter(
+                    x=_bh_eq.index, y=_bh_eq,
+                    mode="lines", name="Buy & Hold",
+                    line=dict(color="#9e9e9e", width=1.2, dash="dash"),
+                ))
+                _bh_legend = True
         fig.update_layout(
             template="plotly_dark", height=320,
             margin=dict(l=0, r=0, t=10, b=0),
-            xaxis_title=None, yaxis_title="Портфель (USDT)", showlegend=False,
+            xaxis_title=None, yaxis_title="Портфель (USDT)", showlegend=_bh_legend,
         )
         st.plotly_chart(fig, use_container_width=True)
     except ImportError:
@@ -2067,6 +2097,319 @@ else:
                 st.rerun()
 
 
+# ─── СРАВНЕНИЕ СТРАТЕГИЙ ─────────────────────────────────────────────────────
+st.divider()
+st.subheader("📊  Сравнение стратегий")
+
+if st.session_state.backtest_results is None:
+    st.info("Сначала запустите бэктест — сравнение использует те же данные и параметры.")
+else:
+    _cmp_res_bt = st.session_state.backtest_results
+    _cmp_df_full = _cmp_res_bt.get("df_bt")
+    _cmp_bp = _cmp_res_bt["backtest_params"]
+
+    _CMP_LABELS: dict[str, str] = {
+        "sma_cross":       "SMA Crossover",
+        "ema_cross":       "EMA Crossover",
+        "rsi":             "RSI Mean Reversion",
+        "macd":            "MACD Momentum",
+        "bollinger_scalp": "Bollinger Scalp",
+        "stoch_ema_scalp": "Stochastic + EMA Scalp",
+        "vwap_bounce":     "VWAP Bounce",
+        "turtle_soup":     "Turtle Soup",
+        "raschke_80_20":   "80-20 Рашке",
+    }
+    _cmp_col1, _cmp_col2 = st.columns([3, 1])
+    with _cmp_col1:
+        _cmp_selected = st.multiselect(
+            "Стратегии для сравнения",
+            list(_CMP_LABELS.values()),
+            default=list(_CMP_LABELS.values())[:4],
+            key="cmp_strategies",
+        )
+    with _cmp_col2:
+        _cmp_with_bh = st.checkbox("+ Buy & Hold", value=True, key="cmp_bh")
+
+    if _cmp_df_full is None:
+        st.warning("Данные недоступны — запустите бэктест снова.")
+    elif st.button("▶  Запустить сравнение", key="cmp_run_btn", use_container_width=True):
+        _label_to_key = {v: k for k, v in _CMP_LABELS.items()}
+        _cmp_rows = []
+        _cmp_curves: dict = {}
+        _cmp_prog = st.progress(0, text="Сравнение стратегий...")
+        _n_total = len(_cmp_selected) + (1 if _cmp_with_bh else 0)
+        for _ci, _clabel in enumerate(_cmp_selected):
+            _cmp_prog.progress((_ci + 1) / max(_n_total, 1), text=f"Тестирую: {_clabel}…")
+            _ckey = _label_to_key[_clabel]
+            try:
+                _cstrat = get_strategy(_ckey, {})
+                _csigs = _cstrat.generate_signals(_cmp_df_full)
+                _ceq, _ctrades = run_backtest(
+                    _cmp_df_full, _csigs,
+                    initial_capital=_cmp_bp["initial_capital"],
+                    fee=_cmp_bp["commission_pct"] / 100.0,
+                    slippage=_cmp_bp["slippage_pct"] / 100.0,
+                    stop_loss=_cmp_bp["stop_loss_pct"] / 100.0,
+                    take_profit=_cmp_bp["take_profit_pct"] / 100.0,
+                    trailing_stop=_cmp_bp["trailing_stop_pct"] / 100.0,
+                    hold_bars=int(_cmp_bp["hold_bars"]),
+                )
+                _cmets = calculate_metrics(_ceq, _ctrades, _cmp_bp["initial_capital"])
+                _cmp_rows.append({
+                    "Стратегия": _clabel,
+                    "Доходность %": _cmets["total_return"],
+                    "Просадка %": _cmets["max_drawdown"],
+                    "Шарп": _cmets["sharpe_ratio"],
+                    "Profit Factor": str(_cmets["profit_factor"]),
+                    "Win Rate %": _cmets["win_rate"],
+                    "Сделок": _cmets["total_trades"],
+                    "Итог $": _cmets["final_equity"],
+                })
+                _cmp_curves[_clabel] = _ceq["equity"]
+            except Exception as _ce:
+                _cmp_rows.append({
+                    "Стратегия": _clabel,
+                    "Доходность %": None,
+                    "Просадка %": None,
+                    "Шарп": None,
+                    "Profit Factor": "Ошибка",
+                    "Win Rate %": None,
+                    "Сделок": 0,
+                    "Итог $": None,
+                })
+        if _cmp_with_bh:
+            _bh_p0 = float(_cmp_df_full["open"].iloc[0])
+            _bh_p1 = float(_cmp_df_full["close"].iloc[-1])
+            _bh_ret = (_bh_p1 / _bh_p0 - 1.0) * 100.0 if _bh_p0 > 0 else 0.0
+            _bh_final = _cmp_bp["initial_capital"] * (_bh_p1 / _bh_p0) if _bh_p0 > 0 else _cmp_bp["initial_capital"]
+            _cmp_rows.append({
+                "Стратегия": "📈 Buy & Hold",
+                "Доходность %": round(_bh_ret, 2),
+                "Просадка %": None,
+                "Шарп": None,
+                "Profit Factor": "—",
+                "Win Rate %": None,
+                "Сделок": 1,
+                "Итог $": round(_bh_final, 2),
+            })
+            if _bh_p0 > 0:
+                _bh_qty = _cmp_bp["initial_capital"] / _bh_p0
+                _cmp_curves["📈 Buy & Hold"] = _cmp_df_full["close"] * _bh_qty
+        _cmp_prog.progress(1.0, text="Готово!")
+        st.session_state.comparison_results = {"rows": _cmp_rows, "curves": _cmp_curves}
+
+    if st.session_state.comparison_results:
+        _cmp_data = st.session_state.comparison_results
+        _cmp_tbl = pd.DataFrame(_cmp_data["rows"]).sort_values(
+            "Доходность %", ascending=False, na_position="last"
+        )
+        st.dataframe(
+            _cmp_tbl,
+            use_container_width=True,
+            column_config={
+                "Доходность %":  st.column_config.NumberColumn(format="%.2f"),
+                "Просадка %":    st.column_config.NumberColumn(format="%.2f"),
+                "Шарп":          st.column_config.NumberColumn(format="%.3f"),
+                "Win Rate %":    st.column_config.NumberColumn(format="%.1f"),
+                "Итог $":        st.column_config.NumberColumn(format="$%.2f"),
+            },
+            hide_index=True,
+        )
+        try:
+            import plotly.graph_objects as _go_cmp
+            _cfig = _go_cmp.Figure()
+            _CMP_PAL = ["#00e676","#2196f3","#ff9800","#e91e63","#9c27b0",
+                        "#00bcd4","#ffeb3b","#f44336","#4caf50","#9e9e9e"]
+            for _ci2, (_cl2, _ceq2) in enumerate(_cmp_data["curves"].items()):
+                _dash = "dash" if _cl2 == "📈 Buy & Hold" else "solid"
+                _cfig.add_trace(_go_cmp.Scatter(
+                    x=_ceq2.index, y=_ceq2, mode="lines", name=_cl2,
+                    line=dict(color=_CMP_PAL[_ci2 % len(_CMP_PAL)], width=1.2, dash=_dash),
+                ))
+            _cfig.update_layout(
+                template="plotly_dark", height=360,
+                margin=dict(l=0, r=0, t=10, b=0),
+                xaxis_title=None, yaxis_title="Капитал (USDT)", showlegend=True,
+            )
+            st.plotly_chart(_cfig, use_container_width=True)
+        except Exception:
+            pass
+        _cmp_dl_col, _cmp_clr_col = st.columns(2)
+        _cmp_dl_col.download_button(
+            "💾  Скачать CSV",
+            data=_cmp_tbl.to_csv(index=False).encode("utf-8"),
+            file_name="strategy_comparison.csv",
+            mime="text/csv",
+            use_container_width=True,
+        )
+        if _cmp_clr_col.button("🗑  Очистить", key="cmp_clear_btn", use_container_width=True):
+            st.session_state.comparison_results = None
+            st.rerun()
+
+
+# ─── WALK-FORWARD АНАЛИЗ ──────────────────────────────────────────────────────
+st.divider()
+st.subheader("🔄  Walk-Forward Анализ")
+
+if st.session_state.backtest_results is None:
+    st.info("Сначала запустите бэктест — Walk-Forward использует ту же стратегию и данные.")
+else:
+    _wf_res_bt = st.session_state.backtest_results
+    _wf_df_full = _wf_res_bt.get("df_bt")
+    _wf_skey = _wf_res_bt["strategy_key"]
+    _wf_sparams = _wf_res_bt["strategy_params"]
+    _wf_slabel = _wf_res_bt["strategy_label"]
+    _wf_bp = _wf_res_bt["backtest_params"]
+
+    st.caption(f"Стратегия: **{_wf_slabel}**  |  параметры: {_wf_sparams}")
+    _wf_c1, _wf_c2 = st.columns(2)
+    with _wf_c1:
+        _wf_is_pct = st.slider(
+            "Доля In-Sample (%)", 50, 85, 70, step=5, key="wf_is_pct",
+            help="Доля каждого окна, используемая как обучающая выборка.",
+        )
+    with _wf_c2:
+        _wf_folds = st.number_input(
+            "Количество фолдов", 1, 5, 3, step=1, key="wf_folds",
+            help="На сколько равных окон разбить данные.",
+        )
+
+    if _wf_df_full is None:
+        st.warning("Данные недоступны — запустите бэктест снова.")
+    elif st.button("▶  Запустить Walk-Forward", key="wf_run_btn", use_container_width=True):
+        _wf_n = len(_wf_df_full)
+        _wf_fold_sz = _wf_n // int(_wf_folds)
+        _wf_is_sz = int(_wf_fold_sz * int(_wf_is_pct) / 100)
+        _wf_oos_sz = _wf_fold_sz - _wf_is_sz
+        if _wf_oos_sz < 10:
+            st.error("Слишком мало баров для OOS. Уменьшите количество фолдов или долю IS.")
+        else:
+            _wf_rows = []
+            _wf_oos_curves: dict = {}
+            _wf_prog = st.progress(0, text="Walk-Forward…")
+            for _fi in range(int(_wf_folds)):
+                _wf_prog.progress((_fi + 1) / int(_wf_folds), text=f"Фолд {_fi+1}/{int(_wf_folds)}…")
+                _si = _fi * _wf_fold_sz
+                _ie = _si + _wf_is_sz
+                _oe = min(_si + _wf_fold_sz, _wf_n)
+                _wf_is_df = _wf_df_full.iloc[_si:_ie]
+                _wf_oos_df = _wf_df_full.iloc[_ie:_oe]
+                try:
+                    _wf_strat = get_strategy(_wf_skey, _wf_sparams)
+                    _is_sigs = _wf_strat.generate_signals(_wf_is_df)
+                    _is_eq, _is_tr = run_backtest(
+                        _wf_is_df, _is_sigs,
+                        initial_capital=_wf_bp["initial_capital"],
+                        fee=_wf_bp["commission_pct"] / 100.0,
+                        slippage=_wf_bp["slippage_pct"] / 100.0,
+                        stop_loss=_wf_bp["stop_loss_pct"] / 100.0,
+                        take_profit=_wf_bp["take_profit_pct"] / 100.0,
+                        trailing_stop=_wf_bp["trailing_stop_pct"] / 100.0,
+                        hold_bars=int(_wf_bp["hold_bars"]),
+                    )
+                    _is_mets = calculate_metrics(_is_eq, _is_tr, _wf_bp["initial_capital"])
+
+                    _oos_strat = get_strategy(_wf_skey, _wf_sparams)
+                    _oos_sigs = _oos_strat.generate_signals(_wf_oos_df)
+                    _oos_eq, _oos_tr = run_backtest(
+                        _wf_oos_df, _oos_sigs,
+                        initial_capital=_wf_bp["initial_capital"],
+                        fee=_wf_bp["commission_pct"] / 100.0,
+                        slippage=_wf_bp["slippage_pct"] / 100.0,
+                        stop_loss=_wf_bp["stop_loss_pct"] / 100.0,
+                        take_profit=_wf_bp["take_profit_pct"] / 100.0,
+                        trailing_stop=_wf_bp["trailing_stop_pct"] / 100.0,
+                        hold_bars=int(_wf_bp["hold_bars"]),
+                    )
+                    _oos_mets = calculate_metrics(_oos_eq, _oos_tr, _wf_bp["initial_capital"])
+
+                    _wf_rows.append({
+                        "Фолд": _fi + 1,
+                        "IS баров": len(_wf_is_df),
+                        "IS доход %": _is_mets["total_return"],
+                        "IS Шарп": _is_mets["sharpe_ratio"],
+                        "IS сделок": _is_mets["total_trades"],
+                        "OOS баров": len(_wf_oos_df),
+                        "OOS доход %": _oos_mets["total_return"],
+                        "OOS Шарп": _oos_mets["sharpe_ratio"],
+                        "OOS сделок": _oos_mets["total_trades"],
+                    })
+                    _wf_oos_curves[f"Фолд {_fi + 1}"] = _oos_eq["equity"]
+                except Exception as _we:
+                    _wf_rows.append({
+                        "Фолд": _fi + 1,
+                        "IS баров": 0, "IS доход %": None, "IS Шарп": None, "IS сделок": 0,
+                        "OOS баров": 0, "OOS доход %": None, "OOS Шарп": None, "OOS сделок": 0,
+                    })
+            _wf_prog.progress(1.0, text="Готово!")
+            _is_rets = [r["IS доход %"] for r in _wf_rows if r["IS доход %"] is not None]
+            _oos_rets = [r["OOS доход %"] for r in _wf_rows if r["OOS доход %"] is not None]
+            _robustness = None
+            if _is_rets and _oos_rets:
+                _avg_is = sum(_is_rets) / len(_is_rets)
+                _avg_oos = sum(_oos_rets) / len(_oos_rets)
+                if _avg_is != 0:
+                    _robustness = round(_avg_oos / _avg_is, 3)
+            st.session_state.wf_results = {
+                "rows": _wf_rows,
+                "oos_curves": _wf_oos_curves,
+                "robustness": _robustness,
+                "strategy": _wf_slabel,
+            }
+
+    if st.session_state.wf_results:
+        _wf_data = st.session_state.wf_results
+        _rob = _wf_data.get("robustness")
+        if _rob is not None:
+            if _rob >= 0.7:
+                _rc, _rl = "#4caf50", "Устойчивая"
+            elif _rob >= 0.3:
+                _rc, _rl = "#ff9800", "Средняя"
+            else:
+                _rc, _rl = "#f44336", "Слабая"
+            st.markdown(
+                f"<div style='text-align:center;padding:10px;border:1px solid {_rc};"
+                f"border-radius:6px;margin-bottom:8px;'>"
+                f"<span style='color:{_rc};font-size:24px;font-weight:bold;'>{_rob:+.3f}</span><br>"
+                f"<small style='color:#aaa;'>Коэф. устойчивости (OOS/IS) — {_rl}</small></div>",
+                unsafe_allow_html=True,
+            )
+            st.caption("≥ 0.7 = OOS близко к IS, стратегия не переобучена. < 0.3 = результаты не воспроизводятся.")
+        _wf_tbl = pd.DataFrame(_wf_data["rows"])
+        st.dataframe(
+            _wf_tbl,
+            use_container_width=True,
+            column_config={
+                "IS доход %":  st.column_config.NumberColumn(format="%.2f"),
+                "IS Шарп":     st.column_config.NumberColumn(format="%.3f"),
+                "OOS доход %": st.column_config.NumberColumn(format="%.2f"),
+                "OOS Шарп":    st.column_config.NumberColumn(format="%.3f"),
+            },
+            hide_index=True,
+        )
+        if _wf_data["oos_curves"]:
+            try:
+                import plotly.graph_objects as _go_wf
+                _wfig = _go_wf.Figure()
+                _WF_PAL = ["#00e676","#2196f3","#ff9800","#e91e63","#9c27b0"]
+                for _wci, (_wl, _weq) in enumerate(_wf_data["oos_curves"].items()):
+                    _wfig.add_trace(_go_wf.Scatter(
+                        x=_weq.index, y=_weq, mode="lines", name=_wl,
+                        line=dict(color=_WF_PAL[_wci % len(_WF_PAL)], width=1.3),
+                    ))
+                _wfig.update_layout(
+                    template="plotly_dark", height=300,
+                    margin=dict(l=0, r=0, t=10, b=0),
+                    xaxis_title=None, yaxis_title="OOS Капитал (USDT)", showlegend=True,
+                )
+                st.plotly_chart(_wfig, use_container_width=True)
+            except Exception:
+                pass
+        if st.button("🗑  Очистить Walk-Forward", key="wf_clear_btn"):
+            st.session_state.wf_results = None
+            st.rerun()
+
+
 # ─── РЕЖИМ РАБОТЫ ─────────────────────────────────────────────────────────────
 st.divider()
 with st.expander("🛡️  Режим работы", expanded=False):
@@ -2096,6 +2439,8 @@ with st.expander("🛡️  Режим работы", expanded=False):
     with sf_col:
         st.markdown(
             "**В будущих версиях**\n"
-            "- 🔜 Сравнение стратегий\n"
+            "- ✅ Сравнение стратегий\n"
+            "- ✅ Walk-Forward Анализ\n"
+            "- ✅ Buy & Hold бенчмарк\n"
             "- 🔜 Живая торговля"
         )
