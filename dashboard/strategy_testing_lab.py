@@ -2,6 +2,8 @@
 from __future__ import annotations
 
 import inspect
+import json
+import re
 import sys
 from pathlib import Path
 
@@ -52,6 +54,8 @@ _defaults: dict = {
     },
     "api_status": {},                  # {"binance": {"ok": bool, "message": str}}
     "selected_strategy": "sma_cross",  # persists selectbox selection across reruns
+    "data_symbol": "BTC/USDT",
+    "data_source": "",
 }
 for _k, _v in _defaults.items():
     if _k not in st.session_state:
@@ -142,6 +146,255 @@ def _get_api(exchange_id: str) -> tuple[str | None, str | None]:
     k = keys.get("key", "").strip() or None
     s = keys.get("secret", "").strip() or None
     return k, s
+
+
+# ─── ЭКСПОРТ АНАЛИЗА ──────────────────────────────────────────────────────────
+
+def export_analysis_safe_filename(value: str) -> str:
+    if not value or not value.strip():
+        return "unknown"
+    v = re.sub(r'[/\\:*?"<>|]', "", value.strip())
+    v = v.replace(" ", "_")
+    v = re.sub(r"_+", "_", v).strip("_")
+    return v or "unknown"
+
+
+def export_analysis_to_json_bytes(data: dict) -> bytes:
+    return json.dumps(data, ensure_ascii=False, indent=2, default=str).encode("utf-8")
+
+
+def export_analysis_to_csv_bytes(df: pd.DataFrame) -> bytes:
+    return df.to_csv(index=False).encode("utf-8")
+
+
+def export_analysis_build_trades_df(
+    trades: list,
+    symbol: str,
+    timeframe: str,
+) -> pd.DataFrame:
+    _COLS = [
+        "trade_id", "symbol", "timeframe", "side",
+        "entry_time", "entry_price", "exit_time", "exit_price",
+        "qty", "gross_pnl", "net_pnl", "pnl_pct",
+        "fees", "slippage", "holding_bars",
+        "entry_reason", "exit_reason", "stop_loss", "take_profit",
+    ]
+    if not trades:
+        return pd.DataFrame(columns=_COLS)
+
+    tf_sec = _TF_SECONDS.get(timeframe, 3600)
+    rows = []
+    for i, t in enumerate(trades):
+        ep      = float(getattr(t, "entry_price", 0) or 0)
+        xp      = float(getattr(t, "exit_price",  0) or 0)
+        qty     = float(getattr(t, "shares",       0) or 0)
+        pnl     = float(getattr(t, "pnl",          0) or 0)
+        pnl_pct = float(getattr(t, "pnl_pct",      0) or 0)
+        ets     = getattr(t, "entry_ts", None)
+        xts     = getattr(t, "exit_ts",  None)
+
+        gross_pnl = qty * (xp - ep) if xp else 0.0
+        fees      = qty * ep * 0.001 + (qty * xp * 0.001 if xp else 0.0)
+
+        holding = 0
+        if ets is not None and xts is not None:
+            try:
+                holding = max(1, int(
+                    (pd.Timestamp(xts) - pd.Timestamp(ets)).total_seconds() / tf_sec
+                ))
+            except Exception:
+                pass
+
+        rows.append({
+            "trade_id":     i + 1,
+            "symbol":       symbol,
+            "timeframe":    timeframe,
+            "side":         "long",
+            "entry_time":   str(ets)[:19] if ets is not None else "",
+            "entry_price":  round(ep,      8),
+            "exit_time":    str(xts)[:19] if xts is not None else "",
+            "exit_price":   round(xp,      8),
+            "qty":          round(qty,     8),
+            "gross_pnl":    round(gross_pnl, 4),
+            "net_pnl":      round(pnl,     4),
+            "pnl_pct":      round(pnl_pct, 4),
+            "fees":         round(fees,    4),
+            "slippage":     0,
+            "holding_bars": holding,
+            "entry_reason": "signal",
+            "exit_reason":  getattr(t, "exit_reason", "") or "",
+            "stop_loss":    "",
+            "take_profit":  "",
+        })
+    return pd.DataFrame(rows)
+
+
+def export_analysis_build_equity_df(
+    df: pd.DataFrame,
+    equity_curve: pd.DataFrame | None,
+    initial_capital: float,
+) -> pd.DataFrame:
+    if equity_curve is not None and not equity_curve.empty and "equity" in equity_curve.columns:
+        idx = equity_curve.index
+        eq  = equity_curve["equity"]
+    else:
+        idx = df.index
+        eq  = pd.Series(float(initial_capital), index=idx)
+
+    close        = df["close"].reindex(idx) if "close" in df.columns else pd.Series(0.0, index=idx)
+    drawdown_pct = ((eq / eq.cummax()) - 1.0) * 100.0
+
+    return pd.DataFrame({
+        "timestamp":    idx.astype(str),
+        "equity":       eq.round(4).values,
+        "drawdown_pct": drawdown_pct.round(4).values,
+        "position":     0,
+        "signal":       0,
+        "close":        close.values,
+    })
+
+
+def export_analysis_build_summary(
+    strategy_label: str,
+    strategy_key: str,
+    df: pd.DataFrame,
+    trades_df: pd.DataFrame,
+    equity_df: pd.DataFrame,
+    metrics: dict,
+    strategy_params: dict,
+    backtest_params: dict,
+    symbol: str,
+    timeframe: str,
+    source: str,
+) -> dict:
+    n       = len(trades_df)
+    win_df  = trades_df[trades_df["pnl_pct"] > 0] if n else pd.DataFrame()
+    loss_df = trades_df[trades_df["pnl_pct"] < 0] if n else pd.DataFrame()
+
+    avg_profit = round(float(win_df["pnl_pct"].mean()),  4) if len(win_df)  else 0.0
+    avg_loss   = round(float(loss_df["pnl_pct"].mean()), 4) if len(loss_df) else 0.0
+    win_rate   = len(win_df) / n if n else 0.0
+    expectancy = round(win_rate * avg_profit + (1 - win_rate) * avg_loss, 4) if n else 0.0
+
+    gross_profit = float(trades_df.loc[trades_df["net_pnl"] > 0, "net_pnl"].sum()) if n else 0.0
+    gross_loss   = float(trades_df.loc[trades_df["net_pnl"] < 0, "net_pnl"].sum()) if n else 0.0
+    pf           = round(gross_profit / abs(gross_loss), 4) if gross_loss != 0 else None
+
+    raw_pf      = metrics.get("profit_factor", 0)
+    fallback_pf = None if str(raw_pf) == "∞" else (float(raw_pf) if raw_pf else None)
+    max_dd      = float(metrics.get("max_drawdown", 0) or 0)
+
+    return {
+        "export_schema": {"name": "crypto_strategy_lab_backtest_analysis", "version": "1.0"},
+        "strategy": {"name": strategy_key, "description": "", "class_name": strategy_label},
+        "data": {
+            "symbol":    symbol,
+            "timeframe": timeframe,
+            "source":    source,
+            "bars":      len(df),
+            "start":     str(df.index[0])[:10]  if len(df) else "",
+            "end":       str(df.index[-1])[:10] if len(df) else "",
+        },
+        "strategy_params": strategy_params,
+        "backtest_params": backtest_params,
+        "metrics": {
+            "total_return_pct": float(metrics.get("total_return",    0) or 0),
+            "max_drawdown_pct": max_dd,
+            "sharpe":           float(metrics.get("sharpe_ratio",    0) or 0),
+            "sortino":          float(metrics.get("sortino_ratio",   0) or 0),
+            "profit_factor":    pf if pf is not None else fallback_pf,
+            "win_rate_pct":     round(win_rate * 100, 2),
+            "total_trades":     n,
+            "avg_trade_pct":    float(metrics.get("avg_trade_return", 0) or 0),
+            "avg_profit_pct":   avg_profit,
+            "avg_loss_pct":     avg_loss,
+            "expectancy_pct":   expectancy,
+            "final_capital":    float(
+                metrics.get("final_equity", backtest_params.get("initial_capital", 0)) or 0
+            ),
+        },
+        "quality_flags": {
+            "enough_trades":       n >= 100,
+            "profit_factor_valid": pf is not None and pf > 0,
+            "expectancy_positive": expectancy > 0,
+            "drawdown_acceptable": max_dd > -30,
+        },
+        "analysis_prompt": (
+            "Оцени стратегию строго по метрикам. Дай вывод в формате: "
+            "1. Вердикт A/B/C/D  2. Что хорошо  3. Что плохо  "
+            "4. Главная проблема  5. Один следующий тест."
+        ),
+    }
+
+
+def export_analysis_build_pack(
+    summary: dict,
+    trades_df: pd.DataFrame,
+    equity_df: pd.DataFrame,
+) -> dict:
+    return {
+        "export_schema": {"name": "crypto_strategy_lab_backtest_analysis_pack", "version": "1.0"},
+        "summary": summary,
+        "trades": trades_df.to_dict(orient="records"),
+        "equity": equity_df.to_dict(orient="records"),
+    }
+
+
+def export_analysis_render_downloads(res: dict, df_source: pd.DataFrame) -> None:
+    equity_curve    = res.get("equity_curve")
+    trades_raw      = res.get("trades", [])
+    metrics         = res.get("metrics", {})
+    strategy_label  = res.get("strategy_label", "")
+    strategy_key    = res.get("strategy_key") or res.get("strategy_label", "strategy")
+    strategy_params = res.get("strategy_params", {})
+    backtest_params = res.get("backtest_params", {})
+    symbol          = res.get("symbol", st.session_state.get("data_symbol", "unknown"))
+    timeframe       = res.get("timeframe", "")
+    source          = res.get("source", st.session_state.get("data_source", ""))
+    initial_capital = backtest_params.get("initial_capital", 10_000.0)
+
+    if equity_curve is not None and not equity_curve.empty:
+        df = df_source.reindex(equity_curve.index)
+    else:
+        df = df_source
+
+    try:
+        trades_df = export_analysis_build_trades_df(trades_raw, symbol, timeframe)
+        equity_df = export_analysis_build_equity_df(df, equity_curve, initial_capital)
+        summary   = export_analysis_build_summary(
+            strategy_label, strategy_key, df, trades_df, equity_df,
+            metrics, strategy_params, backtest_params, symbol, timeframe, source,
+        )
+        pack = export_analysis_build_pack(summary, trades_df, equity_df)
+    except Exception as _e:
+        st.warning(f"Нет данных для выгрузки. Сначала запустите бэктест. ({_e})")
+        return
+
+    s, sym, tf = (
+        export_analysis_safe_filename(strategy_key),
+        export_analysis_safe_filename(symbol),
+        export_analysis_safe_filename(timeframe),
+    )
+    pfx = f"{s}_{sym}_{tf}"
+
+    st.subheader("📤  Выгрузка для анализа стратегии")
+    d1, d2, d3, d4 = st.columns(4)
+    d1.download_button(
+        "📄 summary.json", export_analysis_to_json_bytes(summary),
+        f"{pfx}_summary.json", "application/json", use_container_width=True,
+    )
+    d2.download_button(
+        "📊 trades.csv", export_analysis_to_csv_bytes(trades_df),
+        f"{pfx}_trades.csv", "text/csv", use_container_width=True,
+    )
+    d3.download_button(
+        "📈 equity.csv", export_analysis_to_csv_bytes(equity_df),
+        f"{pfx}_equity.csv", "text/csv", use_container_width=True,
+    )
+    d4.download_button(
+        "🤖 analysis_pack.json", export_analysis_to_json_bytes(pack),
+        f"{pfx}_analysis_pack.json", "application/json", use_container_width=True,
+    )
 
 
 # ─── БОКОВАЯ ПАНЕЛЬ: ПОЛНАЯ ИНСТРУКЦИЯ ────────────────────────────────────────
@@ -607,6 +860,8 @@ with left_col:
             df_loaded = generate_sample_ohlcv(n_bars=_n_bars, start=str(start_date), freq=timeframe)
             st.session_state.df = df_loaded
             st.session_state.data_label = f"Синтетика BTC/USDT {timeframe} — {_n_bars:,} баров"
+            st.session_state.data_symbol = "BTC/USDT"
+            st.session_state.data_source = "synthetic"
             st.session_state.backtest_results = None
             _log(f"Синтетика: {_n_bars} баров, {timeframe}")
 
@@ -619,6 +874,8 @@ with left_col:
                 df_loaded = dm.load_from_csv(csv_file.read())
                 st.session_state.df = df_loaded
                 st.session_state.data_label = f"CSV: {csv_file.name}  ({len(df_loaded):,} баров)"
+                st.session_state.data_symbol = csv_file.name.rsplit(".", 1)[0]
+                st.session_state.data_source = "csv"
                 st.session_state.backtest_results = None
                 _log(f"CSV: {csv_file.name}, {len(df_loaded)} баров")
                 st.success(f"Загружено {len(df_loaded):,} баров")
@@ -663,6 +920,8 @@ with left_col:
                 st.session_state.data_label = (
                     f"{exc_sel.title()} {sym_sel} {timeframe} — {len(df_loaded):,} баров"
                 )
+                st.session_state.data_symbol = sym_sel
+                st.session_state.data_source = exc_sel
                 st.session_state.backtest_results = None
                 _log(f"Загружено {len(df_loaded)} баров: {exc_sel} {sym_sel} {timeframe}")
                 _status.success(f"✅  Загружено {len(df_loaded):,} баров")
@@ -825,8 +1084,21 @@ with center_col:
                         "trades": trades,
                         "metrics": metrics,
                         "strategy_label": selected_label,
+                        "strategy_key": selected_key,
                         "strategy_params": strategy_params,
                         "bars": len(df_bt),
+                        "symbol": st.session_state.data_symbol,
+                        "timeframe": timeframe,
+                        "source": st.session_state.data_source,
+                        "backtest_params": {
+                            "initial_capital": float(initial_capital),
+                            "commission_pct": fee_pct,
+                            "slippage_pct": slippage_pct,
+                            "position_sizing": "% от капитала",
+                            "stop_loss_pct": stop_loss_pct,
+                            "take_profit_pct": take_profit_pct,
+                            "trailing_stop_pct": trailing_stop_pct,
+                        },
                     }
                     _log(
                         f"Бэктест — {selected_label}  "
@@ -975,6 +1247,10 @@ if st.session_state.backtest_results:
                 for t in trades
             ]
             st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
+
+    st.divider()
+    if st.session_state.df is not None:
+        export_analysis_render_downloads(res, st.session_state.df)
 
 
 # ─── РЕЖИМ РАБОТЫ ─────────────────────────────────────────────────────────────
