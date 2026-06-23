@@ -45,9 +45,10 @@ _defaults: dict = {
     "ui_logs": [],
     "command_preview": "",
     "custom_code": "",
-    "custom_strategy_cls": None,       # загруженный класс стратегии
-    "custom_strategy_params": {},      # параметры по умолчанию из __init__
-    "custom_strategy_name": "",        # имя класса
+    "custom_strategy_cls": None,       # compat — not used by new multi-strategy UI
+    "custom_strategy_params": {},
+    "custom_strategy_name": "",
+    "custom_strategies": {},           # {cls_name: {"cls": cls, "params": {}, "code": ""}}
     "api_keys": {
         "binance": {"key": "", "secret": ""},
         "bybit":   {"key": "", "secret": ""},
@@ -146,6 +147,40 @@ def _get_api(exchange_id: str) -> tuple[str | None, str | None]:
     k = keys.get("key", "").strip() or None
     s = keys.get("secret", "").strip() or None
     return k, s
+
+
+# ─── УПРАВЛЕНИЕ ПОЛЬЗОВАТЕЛЬСКИМИ СТРАТЕГИЯМИ ─────────────────────────────────
+_USER_STRATEGIES_DIR = Path(__file__).resolve().parent.parent / "user_strategies"
+
+
+def _get_user_strategies_dir() -> Path:
+    _USER_STRATEGIES_DIR.mkdir(exist_ok=True)
+    return _USER_STRATEGIES_DIR
+
+
+def _save_user_strategy(cls_name: str, code: str) -> None:
+    (_get_user_strategies_dir() / f"{cls_name}.py").write_text(code, encoding="utf-8")
+
+
+def _delete_user_strategy_file(cls_name: str) -> None:
+    f = _get_user_strategies_dir() / f"{cls_name}.py"
+    if f.exists():
+        f.unlink()
+
+
+def _load_all_user_strategies() -> None:
+    for py_file in sorted(_get_user_strategies_dir().glob("*.py")):
+        cls_name = py_file.stem
+        if cls_name in st.session_state.custom_strategies:
+            continue
+        try:
+            code = py_file.read_text(encoding="utf-8")
+            cls, params = _load_custom_strategy(code)
+            st.session_state.custom_strategies[cls.__name__] = {
+                "cls": cls, "params": params, "code": code,
+            }
+        except Exception:
+            pass
 
 
 # ─── ЭКСПОРТ АНАЛИЗА ──────────────────────────────────────────────────────────
@@ -397,6 +432,8 @@ def export_analysis_render_downloads(res: dict, df_source: pd.DataFrame) -> None
     )
 
 
+_load_all_user_strategies()
+
 # ─── БОКОВАЯ ПАНЕЛЬ: ПОЛНАЯ ИНСТРУКЦИЯ ────────────────────────────────────────
 with st.sidebar:
     st.markdown("# 📖 Инструкция")
@@ -587,10 +624,8 @@ with left_col:
         "turtle_soup":    "Turtle Soup (контртренд)",
         "raschke_80_20":  "80-20 по Рашке (разворот)",
     }
-    # Добавляем кастомную если загружена
-    if st.session_state.custom_strategy_cls is not None:
-        _cname = st.session_state.custom_strategy_name
-        STRATEGY_LABELS_RU["custom"] = f"🆕 Своя: {_cname}"
+    for _cn in st.session_state.custom_strategies:
+        STRATEGY_LABELS_RU[f"custom__{_cn}"] = f"🆕 {_cn}"
 
     strategy_label_to_key = {v: k for k, v in STRATEGY_LABELS_RU.items()}
     _labels_list = list(STRATEGY_LABELS_RU.values())
@@ -614,8 +649,10 @@ with left_col:
         "vwap_bounce":    "Скальп M15 — отскок от нижней полосы VWAP.",
         "turtle_soup":    "Контртренд — ловля ложного пробоя N-барового минимума.",
         "raschke_80_20":  "Разворот — вход после бара: открытие внизу, закрытие вверху.",
-        "custom":         f"Своя стратегия: {st.session_state.custom_strategy_name}",
     }
+    for _cn, _ci in st.session_state.custom_strategies.items():
+        _cd = getattr(_ci.get("cls"), "description", "") or ""
+        STRATEGY_CAPTIONS_RU[f"custom__{_cn}"] = f"Своя: {_cn}" + (f" — {_cd}" if _cd else "")
     st.caption(STRATEGY_CAPTIONS_RU.get(selected_key, ""))
 
     # Динамические параметры стратегии
@@ -677,12 +714,12 @@ with left_col:
         )
         strategy_params["exit_ema"] = pc2.number_input("Выход EMA", 2, 50, 5, step=1)
 
-    elif selected_key == "custom":
-        _cls = st.session_state.custom_strategy_cls
-        _default_params = st.session_state.custom_strategy_params
-        _strat_display_name = (
-            getattr(_cls, "name", None) or st.session_state.custom_strategy_name
-        ) if _cls else st.session_state.custom_strategy_name
+    elif selected_key.startswith("custom__"):
+        _cn = selected_key[8:]
+        _ci = st.session_state.custom_strategies.get(_cn, {})
+        _cls = _ci.get("cls")
+        _default_params = _ci.get("params", {})
+        _strat_display_name = getattr(_cls, "name", None) or _cn
         st.caption(f"Параметры стратегии: **{_strat_display_name}**")
         if _default_params:
             _p_cols = st.columns(min(len(_default_params), 3))
@@ -716,6 +753,23 @@ with left_col:
     # СВОЯ СТРАТЕГИЯ — исполняемый блок
     # ══════════════════════════════════════════════════════════════════════════
     with st.expander("📝  Своя стратегия", expanded=False):
+        # ── Список загруженных стратегий ──────────────────────────────────────
+        if st.session_state.custom_strategies:
+            st.markdown("**Загруженные стратегии:**")
+            for _cn, _ci in list(st.session_state.custom_strategies.items()):
+                _cls_obj = _ci.get("cls")
+                _desc_txt = getattr(_cls_obj, "description", "") or "—"
+                _row_l, _row_r = st.columns([3, 1])
+                _row_l.markdown(f"**{_cn}** — *{_desc_txt}*")
+                if _row_r.button("🗑", key=f"del_strategy_{_cn}", help=f"Удалить {_cn}"):
+                    del st.session_state.custom_strategies[_cn]
+                    _delete_user_strategy_file(_cn)
+                    if st.session_state.selected_strategy == f"custom__{_cn}":
+                        st.session_state.selected_strategy = "sma_cross"
+                    _log(f"Стратегия удалена: {_cn}")
+                    st.rerun()
+            st.divider()
+
         st.caption(
             "Загрузите .py файл или вставьте код. "
             "Класс должен наследовать `BaseStrategy` и реализовывать `generate_signals(df)`."
@@ -748,7 +802,7 @@ with left_col:
         )
 
         _activate_btn = st.button(
-            "▶️  Активировать стратегию",
+            "▶️  Добавить стратегию",
             use_container_width=True,
             type="primary",
             disabled=not bool(st.session_state.custom_code.strip()),
@@ -756,30 +810,17 @@ with left_col:
         if _activate_btn:
             try:
                 cls, params = _load_custom_strategy(st.session_state.custom_code)
-                st.session_state.custom_strategy_cls = cls
-                st.session_state.custom_strategy_params = params
-                st.session_state.custom_strategy_name = cls.__name__
-                st.session_state.selected_strategy = "custom"
-                _log(f"Стратегия активирована: {cls.__name__}  параметры: {params}")
+                st.session_state.custom_strategies[cls.__name__] = {
+                    "cls": cls, "params": params, "code": st.session_state.custom_code,
+                }
+                _save_user_strategy(cls.__name__, st.session_state.custom_code)
+                st.session_state.selected_strategy = f"custom__{cls.__name__}"
+                _log(f"Стратегия добавлена: {cls.__name__}  параметры: {params}")
                 st.rerun()
             except ValueError as exc:
                 st.error(f"❌  {exc}")
             except Exception as exc:
                 st.error(f"❌  Неожиданная ошибка: {exc}")
-
-        if st.session_state.custom_strategy_cls is not None:
-            _cls = st.session_state.custom_strategy_cls
-            _desc = getattr(_cls, "description", "—")
-            st.success(
-                f"✅  **{_cls.__name__}** активна\n\n"
-                f"{_desc}\n\n"
-                f"Параметры: `{st.session_state.custom_strategy_params}`"
-            )
-            if st.button("🗑  Удалить кастомную стратегию", use_container_width=True):
-                st.session_state.custom_strategy_cls = None
-                st.session_state.custom_strategy_params = {}
-                st.session_state.custom_strategy_name = ""
-                st.rerun()
 
     st.divider()
 
@@ -1063,8 +1104,12 @@ with center_col:
                     st.error("Нет данных в выбранном диапазоне.")
                 else:
                     # Создаём объект стратегии
-                    if selected_key == "custom" and st.session_state.custom_strategy_cls is not None:
-                        strategy = st.session_state.custom_strategy_cls(**strategy_params)
+                    if selected_key.startswith("custom__"):
+                        _cn = selected_key[8:]
+                        _ci = st.session_state.custom_strategies.get(_cn, {})
+                        if not _ci.get("cls"):
+                            raise ValueError(f"Стратегия '{_cn}' не найдена.")
+                        strategy = _ci["cls"](**strategy_params)
                     else:
                         strategy = get_strategy(selected_key, strategy_params)
 
