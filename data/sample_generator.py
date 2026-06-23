@@ -26,10 +26,12 @@ def generate_sample_ohlcv(
     close = initial_price * np.exp(np.cumsum(log_returns))
 
     noise = np.abs(np.random.normal(0, volatility * 0.5, n_bars))
-    high = close * (1.0 + noise)
-    low = close * (1.0 - noise)
     open_ = np.roll(close, 1)
     open_[0] = initial_price
+    # High/low must envelope BOTH open and close, otherwise bars are invalid
+    # (open outside [low, high]) and intrabar SL/TP fills become meaningless.
+    high = np.maximum(open_, close) * (1.0 + noise)
+    low = np.minimum(open_, close) * (1.0 - noise)
     volume = np.random.lognormal(mean=10.0, sigma=0.8, size=n_bars)
 
     df = pd.DataFrame(

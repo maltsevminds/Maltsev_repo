@@ -6,6 +6,24 @@ import pandas as pd
 
 from backtesting.engine import Trade
 
+_SECONDS_PER_YEAR = 365.0 * 24.0 * 3600.0
+
+
+def _infer_periods_per_year(index: pd.Index) -> float:
+    """Estimate how many bars fit in a year from the median bar spacing.
+
+    Falls back to 252 (daily) when the spacing cannot be determined.
+    """
+    if not isinstance(index, pd.DatetimeIndex) or len(index) < 3:
+        return 252.0
+    deltas = index.to_series().diff().dropna()
+    if deltas.empty:
+        return 252.0
+    median_sec = float(deltas.dt.total_seconds().median())
+    if median_sec <= 0:
+        return 252.0
+    return _SECONDS_PER_YEAR / median_sec
+
 
 def calculate_metrics(
     equity_curve: pd.DataFrame,
@@ -22,17 +40,21 @@ def calculate_metrics(
     drawdown = (eq - rolling_peak) / rolling_peak
     max_drawdown_pct = float(drawdown.min()) * 100.0
 
-    # Annualised Sharpe (assumes hourly/daily bars, scales by sqrt(252))
-    daily_rets = eq.pct_change().dropna()
+    # Annualised Sharpe / Sortino — scale by sqrt(periods per year), derived
+    # from the actual bar spacing so intraday timeframes are not understated.
+    periods_per_year = _infer_periods_per_year(eq.index)
+    ann = np.sqrt(periods_per_year)
+
+    bar_rets = eq.pct_change().dropna()
     sharpe = 0.0
-    if len(daily_rets) > 1 and daily_rets.std() > 0:
-        sharpe = float(daily_rets.mean() / daily_rets.std() * np.sqrt(252))
+    if len(bar_rets) > 1 and bar_rets.std() > 0:
+        sharpe = float(bar_rets.mean() / bar_rets.std() * ann)
 
     # Sortino
     sortino = 0.0
-    downside = daily_rets[daily_rets < 0]
+    downside = bar_rets[bar_rets < 0]
     if len(downside) > 1 and downside.std() > 0:
-        sortino = float(daily_rets.mean() / downside.std() * np.sqrt(252))
+        sortino = float(bar_rets.mean() / downside.std() * ann)
 
     # Trade statistics
     closed = [t for t in trades if not t.is_open]

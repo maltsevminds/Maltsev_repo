@@ -24,7 +24,7 @@ def load_ohlcv_csv(source) -> pd.DataFrame:
             f"Got: {list(df.columns)}"
         )
 
-    df[ts_col] = pd.to_datetime(df[ts_col], utc=False, infer_datetime_format=True)
+    df[ts_col] = pd.to_datetime(df[ts_col], utc=False)
     df = df.set_index(ts_col)
     df.index.name = "timestamp"
     df = df.sort_index()

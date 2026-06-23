@@ -3,11 +3,20 @@
 Execution model
 ---------------
 * Signals are observed at bar i's close — no execution on that bar.
-* All orders execute at bar i+1's OPEN (slippage applied to open price).
-* SL, TP, and trailing stop fire at bar open using gap-fill semantics
-  (triggered only when the open has already gapped through the level).
-* Trailing stop tracks the highest CLOSE seen since entry; level updates
-  at bar close, checked at next bar's open — no intrabar look-ahead.
+* Entry orders execute at bar i+1's OPEN (slippage applied to open price).
+* Stop-loss, take-profit and trailing stop are resting orders, checked in
+  two phases each bar (no look-ahead, since both rely only on the current
+  bar's own prices):
+    Phase A — at the OPEN: if the open already gapped through a level, fill
+              at the open. Pending signal / hold-bars market orders also
+              execute here.
+    Phase B — INTRABAR: if the bar's low/high traded through a protective
+              level, fill at that level price.
+  When a level is touched intrabar we cannot know the tick order, so we
+  resolve conservatively: stop-loss → trailing → take-profit.
+* Trailing stop tracks the highest CLOSE since entry; the level updates at
+  each bar's close and is checked on subsequent bars — no intrabar look-ahead
+  on the high-water mark.
 * hold_bars > 0: force-close at open[entry_bar + hold_bars].
 """
 from __future__ import annotations
@@ -70,16 +79,20 @@ def run_backtest(
 
     Parameters
     ----------
-    df              : OHLCV DataFrame with DatetimeIndex; must have 'open' column.
+    df              : OHLCV DataFrame with DatetimeIndex; needs open/high/low/close.
     signals         : Series aligned to df.index — 1=enter, -1=exit, 0=hold.
     initial_capital : starting cash (quote currency).
     fee             : fraction charged on entry AND exit (0.001 = 0.1 %).
     slippage        : fraction applied to execution price.
-    stop_loss       : fixed stop below entry; gap-fill at bar open. 0 = disabled.
-    take_profit     : fixed target above entry; gap-fill at bar open. 0 = disabled.
-    trailing_stop   : X% below the highest CLOSE seen since entry.
-                      Level updates at each bar's close; checked at next open
-                      (gap-fill semantics, no intrabar look-ahead). 0 = disabled.
+    stop_loss       : fixed stop below entry. Filled at the stop level if the
+                      bar's low trades through it (at the open if it gapped).
+                      0 = disabled.
+    take_profit     : fixed target above entry. Filled at the target if the
+                      bar's high trades through it (at the open if it gapped).
+                      0 = disabled.
+    trailing_stop   : X% below the highest CLOSE seen since entry. The level
+                      updates at each bar's close and is checked against later
+                      bars' lows. 0 = disabled.
     hold_bars       : close after this many bars regardless of signal. 0 = disabled.
     """
     cash = float(initial_capital)
@@ -94,6 +107,8 @@ def run_backtest(
 
     sig_arr    = signals.reindex(df.index).fillna(0).values.astype(int)
     opens      = df["open"].values.astype(float)
+    highs      = df["high"].values.astype(float)
+    lows       = df["low"].values.astype(float)
     closes     = df["close"].values.astype(float)
     timestamps = df.index
 
@@ -106,6 +121,8 @@ def run_backtest(
 
     for i in range(len(df)):
         o   = opens[i]
+        h   = highs[i]
+        l   = lows[i]
         c   = closes[i]
         ts  = timestamps[i]
         sig = sig_arr[i]
@@ -121,39 +138,39 @@ def run_backtest(
                 shares=shares, entry_cash=entry_cash,
             )
             entry_bar_idx = i
-            sl_price    = exec_price * (1.0 - stop_loss)   if sl_on    else 0.0
-            tp_price    = exec_price * (1.0 + take_profit) if tp_on    else 0.0
-            trail_high  = exec_price                        if trail_on else 0.0
+            sl_price    = exec_price * (1.0 - stop_loss)     if sl_on    else 0.0
+            tp_price    = exec_price * (1.0 + take_profit)   if tp_on    else 0.0
+            trail_high  = exec_price                          if trail_on else 0.0
             trail_level = exec_price * (1.0 - trailing_stop) if trail_on else 0.0
             pending_enter = False
 
-        # ── 2. Check exit conditions at this bar's open (gap-fill) ───────────
+        # ── 2. Check exit conditions for this bar ─────────────────────────────
         if position is not None:
             bars_held   = i - entry_bar_idx
             exit_reason = None
             exec_exit   = 0.0
 
+            # Phase A — at the open: gap-through stops + pending market orders.
             if sl_on and o <= sl_price:
-                exit_reason = "stop_loss"
-                exec_exit   = o * (1.0 - slippage)
-
+                exit_reason = "stop_loss";     exec_exit = o
             elif trail_on and trail_level > 0.0 and o <= trail_level:
-                exit_reason = "trailing_stop"
-                exec_exit   = o * (1.0 - slippage)
-
+                exit_reason = "trailing_stop"; exec_exit = o
             elif tp_on and o >= tp_price:
-                exit_reason = "take_profit"
-                exec_exit   = o * (1.0 - slippage)
-
+                exit_reason = "take_profit";   exec_exit = o
             elif pending_exit:
-                exit_reason = "signal"
-                exec_exit   = o * (1.0 - slippage)
-
+                exit_reason = "signal";        exec_exit = o
             elif hold_bars > 0 and bars_held >= hold_bars:
-                exit_reason = "hold_bars"
-                exec_exit   = o * (1.0 - slippage)
+                exit_reason = "hold_bars";     exec_exit = o
+            # Phase B — intrabar: a protective level was traded through.
+            elif sl_on and l <= sl_price:
+                exit_reason = "stop_loss";     exec_exit = sl_price
+            elif trail_on and trail_level > 0.0 and l <= trail_level:
+                exit_reason = "trailing_stop"; exec_exit = trail_level
+            elif tp_on and h >= tp_price:
+                exit_reason = "take_profit";   exec_exit = tp_price
 
             if exit_reason:
+                exec_exit *= (1.0 - slippage)
                 cash = _close_trade(position, ts, exec_exit, fee, exit_reason)
                 trades.append(position)
                 position    = None

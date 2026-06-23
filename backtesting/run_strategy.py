@@ -45,6 +45,10 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--capital", type=float, default=10_000.0)
     p.add_argument("--fee", type=float, default=0.001, help="Fee as fraction (0.001 = 0.1%)")
     p.add_argument("--slippage", type=float, default=0.0005)
+    p.add_argument("--stop-loss", type=float, default=0.0, help="Stop-loss as fraction (0.02 = 2%)")
+    p.add_argument("--take-profit", type=float, default=0.0, help="Take-profit as fraction (0.05 = 5%)")
+    p.add_argument("--trailing-stop", type=float, default=0.0, help="Trailing stop as fraction (0.03 = 3%)")
+    p.add_argument("--hold-bars", type=int, default=0, help="Force-close after N bars (0 = disabled)")
     p.add_argument("--risk-per-trade", type=float, default=0.01)
     p.add_argument("--position-sizing", default="percent_of_equity")
     p.add_argument(
@@ -118,6 +122,10 @@ def main() -> None:
         initial_capital=args.capital,
         fee=args.fee,
         slippage=args.slippage,
+        stop_loss=args.stop_loss,
+        take_profit=args.take_profit,
+        trailing_stop=args.trailing_stop,
+        hold_bars=args.hold_bars,
     )
 
     metrics = calculate_metrics(equity_curve, trades, args.capital)

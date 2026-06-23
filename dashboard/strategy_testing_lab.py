@@ -218,13 +218,20 @@ def _pt_run(
     lookback: int,
     api_key: str | None = None,
     api_secret: str | None = None,
+    fee: float = 0.001,
+    slippage: float = 0.0005,
 ) -> dict:
-    """Fetch recent bars from exchange and simulate paper trades."""
+    """Fetch recent bars from exchange and simulate paper trades.
+
+    Executes on CLOSED bars only (the still-forming last candle is dropped to
+    avoid look-ahead) and applies the same fee/slippage as the backtest so the
+    virtual PnL stays consistent with backtest results.
+    """
     from datetime import datetime, timedelta, timezone
     dm = DataManager()
     tf_sec = _TF_SECONDS.get(timeframe, 3600)
     end_dt = datetime.now(timezone.utc)
-    start_dt = end_dt - timedelta(seconds=tf_sec * (lookback + 50))
+    start_dt = end_dt - timedelta(seconds=tf_sec * (lookback + 60))
 
     df = dm.load_from_exchange_all(
         exchange, symbol, timeframe,
@@ -235,6 +242,10 @@ def _pt_run(
     )
     if df.empty:
         raise ValueError("Биржа не вернула данных — проверьте пару и таймфрейм.")
+    # The most recent bar is still forming — drop it so signals use only
+    # completed candles (otherwise the latest signal could flip mid-bar).
+    if len(df) > 1:
+        df = df.iloc[:-1]
     df = df.tail(lookback)
 
     if strategy_key.startswith("custom__"):
@@ -249,7 +260,8 @@ def _pt_run(
     signals = strategy.generate_signals(df)
 
     in_position = False
-    entry_price = 0.0
+    entry_price = 0.0          # execution price at entry (with slippage)
+    entry_cash = 0.0           # cash committed on entry (incl. fee)
     entry_time = None
     virtual_capital = float(capital)
     qty = 0.0
@@ -258,28 +270,40 @@ def _pt_run(
     for ts, sig in signals.items():
         price = float(df.loc[ts, "close"])
         if not in_position and int(sig) == 1:
-            qty = virtual_capital / price
-            entry_price = price
+            entry_price = price * (1.0 + slippage)
+            entry_cash = virtual_capital
+            qty = virtual_capital * (1.0 - fee) / entry_price
             entry_time = ts
+            virtual_capital = 0.0
             in_position = True
         elif in_position and int(sig) == -1:
-            pnl = qty * (price - entry_price)
-            virtual_capital += pnl
+            exit_price = price * (1.0 - slippage)
+            proceeds = qty * exit_price * (1.0 - fee)
+            pnl = proceeds - entry_cash
+            virtual_capital = proceeds
             trades.append({
                 "Вход": str(entry_time)[:16],
                 "Цена входа": round(entry_price, 4),
                 "Выход": str(ts)[:16],
-                "Цена выхода": round(price, 4),
+                "Цена выхода": round(exit_price, 4),
                 "PnL (USDT)": round(pnl, 2),
-                "Доходность %": round((price - entry_price) / entry_price * 100, 2),
+                "Доходность %": round((proceeds / entry_cash - 1.0) * 100, 2) if entry_cash else 0.0,
                 "Капитал": round(virtual_capital, 2),
             })
             in_position = False
             qty = 0.0
 
     current_price = float(df["close"].iloc[-1])
-    unrealized_pnl  = qty * (current_price - entry_price) if in_position else 0.0
-    unrealized_pct  = (current_price - entry_price) / entry_price * 100 if (in_position and entry_price) else 0.0
+    # Mark-to-market the open position net of the exit fee/slippage it would pay.
+    if in_position and entry_cash:
+        cur_value = qty * current_price * (1.0 - slippage) * (1.0 - fee)
+        unrealized_pnl = cur_value - entry_cash
+        unrealized_pct = (cur_value / entry_cash - 1.0) * 100
+        equity_now = cur_value
+    else:
+        unrealized_pnl = 0.0
+        unrealized_pct = 0.0
+        equity_now = virtual_capital
 
     return {
         "df": df, "signals": signals,
@@ -288,7 +312,8 @@ def _pt_run(
         "entry_time": str(entry_time)[:16] if entry_time else None,
         "qty": round(qty, 8),
         "trades": trades,
-        "capital": round(virtual_capital, 2),
+        "capital": round(equity_now, 2),
+        "realized_capital": round(virtual_capital, 2),
         "unrealized_pnl": round(unrealized_pnl, 2),
         "unrealized_pct": round(unrealized_pct, 2),
         "current_price": round(current_price, 4),
@@ -1545,7 +1570,9 @@ st.divider()
 st.subheader("📄  Бумажная торговля")
 st.caption(
     "Симуляция торговли на реальных данных с биржи. "
-    "Виртуальный капитал, сигналы и сделки — без реального исполнения."
+    "Виртуальный капитал, сигналы и сделки — без реального исполнения. "
+    "Считается только по закрытым барам (текущий формирующийся бар отбрасывается), "
+    "с учётом комиссии и проскальзывания из раздела «Параметры бэктеста»."
 )
 
 _pt_cfg_col, _pt_stat_col = st.columns([1.5, 1])
@@ -1612,6 +1639,7 @@ if _pt_b1.button(
                 selected_key, strategy_params,
                 _pt_capital, _pt_lookback,
                 _pt_api_k, _pt_api_s,
+                fee=fee_pct / 100.0, slippage=slippage_pct / 100.0,
             )
             st.session_state.pt_session = _pt_result
             st.session_state.pt_active = True
