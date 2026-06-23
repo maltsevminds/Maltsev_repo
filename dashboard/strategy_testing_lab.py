@@ -1768,7 +1768,8 @@ else:
                 )
                 _istep = _pc3.number_input(
                     f"{_pname} step", value=_pstep,
-                    min_value=0.001, step=1 if _ptype == "int" else 0.01,
+                    min_value=1 if _ptype == "int" else 0.001,
+                    step=1 if _ptype == "int" else 0.01,
                     format="%g", key=f"opt_{_pname}_step"
                 )
                 _ivals = _build_param_values(float(_imin), float(_imax), float(_istep), _ptype)
