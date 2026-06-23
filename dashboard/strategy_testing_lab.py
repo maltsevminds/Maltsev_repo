@@ -51,6 +51,7 @@ _defaults: dict = {
         "bybit":   {"key": "", "secret": ""},
     },
     "api_status": {},                  # {"binance": {"ok": bool, "message": str}}
+    "selected_strategy": "sma_cross",  # persists selectbox selection across reruns
 }
 for _k, _v in _defaults.items():
     if _k not in st.session_state:
@@ -339,8 +340,16 @@ with left_col:
         STRATEGY_LABELS_RU["custom"] = f"🆕 Своя: {_cname}"
 
     strategy_label_to_key = {v: k for k, v in STRATEGY_LABELS_RU.items()}
-    selected_label = st.selectbox("Выберите стратегию", list(STRATEGY_LABELS_RU.values()))
+    _labels_list = list(STRATEGY_LABELS_RU.values())
+    _keys_list = list(STRATEGY_LABELS_RU.keys())
+    _saved_key = st.session_state.get("selected_strategy", "sma_cross")
+    if _saved_key not in STRATEGY_LABELS_RU:
+        _saved_key = "sma_cross"
+    selected_label = st.selectbox(
+        "Выберите стратегию", _labels_list, index=_keys_list.index(_saved_key)
+    )
     selected_key = strategy_label_to_key[selected_label]
+    st.session_state.selected_strategy = selected_key
 
     STRATEGY_CAPTIONS_RU: dict[str, str] = {
         "sma_cross":      "Трендовая — покупка при пересечении быстрой MA вверх.",
@@ -416,9 +425,13 @@ with left_col:
         strategy_params["exit_ema"] = pc2.number_input("Выход EMA", 2, 50, 5, step=1)
 
     elif selected_key == "custom":
+        _cls = st.session_state.custom_strategy_cls
         _default_params = st.session_state.custom_strategy_params
+        _strat_display_name = (
+            getattr(_cls, "name", None) or st.session_state.custom_strategy_name
+        ) if _cls else st.session_state.custom_strategy_name
+        st.caption(f"Параметры стратегии: **{_strat_display_name}**")
         if _default_params:
-            st.caption("Параметры стратегии (из __init__):")
             _p_cols = st.columns(min(len(_default_params), 3))
             for idx, (pname, pdefault) in enumerate(_default_params.items()):
                 col = _p_cols[idx % len(_p_cols)]
@@ -427,7 +440,18 @@ with left_col:
                 elif isinstance(pdefault, int):
                     strategy_params[pname] = col.number_input(pname, value=pdefault, step=1)
                 elif isinstance(pdefault, float):
-                    strategy_params[pname] = col.number_input(pname, value=pdefault, format="%.4f")
+                    _step = 0.001 if abs(pdefault) < 0.1 else 0.01
+                    strategy_params[pname] = col.number_input(
+                        pname, value=pdefault, step=_step, format="%.4f"
+                    )
+                elif isinstance(pdefault, str):
+                    if pname == "direction" and pdefault in ("both", "long", "short"):
+                        strategy_params[pname] = col.selectbox(
+                            pname, ["both", "long", "short"],
+                            index=["both", "long", "short"].index(pdefault),
+                        )
+                    else:
+                        strategy_params[pname] = col.text_input(pname, value=pdefault)
                 else:
                     strategy_params[pname] = col.text_input(pname, value=str(pdefault))
         else:
@@ -482,6 +506,7 @@ with left_col:
                 st.session_state.custom_strategy_cls = cls
                 st.session_state.custom_strategy_params = params
                 st.session_state.custom_strategy_name = cls.__name__
+                st.session_state.selected_strategy = "custom"
                 _log(f"Стратегия активирована: {cls.__name__}  параметры: {params}")
                 st.rerun()
             except ValueError as exc:
