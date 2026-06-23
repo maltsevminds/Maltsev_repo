@@ -735,10 +735,12 @@ class MyStrategy(BaseStrategy):
 
     with st.expander("🛑 Параметры выхода"):
         st.markdown("""
-        **Стоп-лосс** — фиксированный. Срабатывает если открытие следующего бара ≤ SL уровня.\n
-        **Тейк-профит** — фиксированная цель. Срабатывает если открытие ≥ TP уровня.\n
-        **Hold Bars** — принудительное закрытие через N баров после входа.\n
-        Приоритет: `SL → TP → Hold Bars → Сигнал`
+        **Стоп-лосс** — фиксированный. Срабатывает если open ≤ SL уровня.\n
+        **Трейлинг-стоп** — X% ниже максимального close с момента входа.
+        Уровень обновляется на каждом баре; срабатывает по open следующего.\n
+        **Тейк-профит** — фиксированная цель. Срабатывает если open ≥ TP.\n
+        **Hold Bars** — принудительное закрытие через N баров.\n
+        Приоритет: `SL → Trail → TP → Hold Bars → Сигнал`
         """)
 
     st.divider()
@@ -1180,28 +1182,40 @@ with center_col:
 
     # ── Параметры выхода ──────────────────────────────────────────────────────
     st.subheader("🛑  Выход из позиции")
-    st.caption("Все три независимы. `0` = выключено.")
+    st.caption("Все параметры независимы. `0` = выключено.")
 
     ex1, ex2 = st.columns(2)
     with ex1:
         stop_loss_pct = st.number_input(
             "Стоп-лосс (%)", 0.0, 50.0, 0.0, step=0.1, format="%.1f",
-            help="Фиксированный стоп ниже цены входа. По low свечи.",
+            help="Фиксированный стоп ниже цены входа. Срабатывает если open ≤ SL.",
         )
     with ex2:
         take_profit_pct = st.number_input(
             "Тейк-профит (%)", 0.0, 200.0, 0.0, step=0.1, format="%.1f",
-            help="Фиксированная цель выше цены входа. По high свечи.",
+            help="Фиксированная цель выше цены входа. Срабатывает если open ≥ TP.",
         )
 
-    hold_bars = st.number_input(
-        "Удерживать (баров)", 0, 10000, 0, step=1,
-        help="Принудительно закрыть позицию через N баров после входа. 0 = выключено.",
-    )
+    ex3, ex4 = st.columns(2)
+    with ex3:
+        trailing_stop_pct = st.number_input(
+            "Трейлинг-стоп (%)", 0.0, 50.0, 0.0, step=0.1, format="%.1f",
+            help=(
+                "X% ниже максимального close с момента входа. "
+                "Уровень обновляется каждым баром, срабатывает по open следующего."
+            ),
+        )
+    with ex4:
+        hold_bars = st.number_input(
+            "Hold Bars", 0, 10000, 0, step=1,
+            help="Принудительно закрыть позицию через N баров после входа. 0 = выключено.",
+        )
 
     _exits = []
     if stop_loss_pct > 0:
         _exits.append(f"🔴 SL {stop_loss_pct:.1f}%")
+    if trailing_stop_pct > 0:
+        _exits.append(f"🟠 Trail {trailing_stop_pct:.1f}%")
     if take_profit_pct > 0:
         _exits.append(f"🟢 TP {take_profit_pct:.1f}%")
     if hold_bars > 0:
@@ -1258,6 +1272,8 @@ with center_col:
             cmd += f" \\\n  --stop-loss {stop_loss_pct / 100:.4f}"
         if take_profit_pct > 0:
             cmd += f" \\\n  --take-profit {take_profit_pct / 100:.4f}"
+        if trailing_stop_pct > 0:
+            cmd += f" \\\n  --trailing-stop {trailing_stop_pct / 100:.4f}"
         if hold_bars > 0:
             cmd += f" \\\n  --hold-bars {hold_bars}"
         for k, v in strategy_params.items():
@@ -1340,6 +1356,7 @@ with center_col:
                             slippage=slippage_pct / 100.0,
                             stop_loss=stop_loss_pct / 100.0,
                             take_profit=take_profit_pct / 100.0,
+                            trailing_stop=trailing_stop_pct / 100.0,
                             hold_bars=int(hold_bars),
                         )
                         metrics = calculate_metrics(equity_curve, trades, float(initial_capital))
@@ -1361,6 +1378,7 @@ with center_col:
                                 "position_sizing": "% от капитала",
                                 "stop_loss_pct": stop_loss_pct,
                                 "take_profit_pct": take_profit_pct,
+                                "trailing_stop_pct": trailing_stop_pct,
                                 "hold_bars": int(hold_bars),
                             },
                         }
@@ -1489,6 +1507,7 @@ if st.session_state.backtest_results:
         _reason_labels = {
             "signal":        "📊 Сигнал",
             "stop_loss":     "🔴 Стоп-лосс",
+            "trailing_stop": "🟠 Трейлинг",
             "take_profit":   "🟢 Тейк-профит",
             "hold_bars":     "⏱ Hold Bars",
             "end_of_data":   "⏹ Конец данных",
@@ -1859,7 +1878,7 @@ with st.expander("🛡️  Режим работы", expanded=False):
             "- ✅ Загрузка CSV / Биржа\n"
             "- ✅ Скачать данные CSV\n"
             "- ✅ Бэктест 9 стратегий + свои\n"
-            "- ✅ SL / TP / Hold Bars\n"
+            "- ✅ SL / TP / Трейлинг-стоп / Hold Bars\n"
             "- ✅ API ключи (Read Only)\n"
             "- ✅ Бумажная торговля\n"
             "- ✅ Оптимизация параметров"
