@@ -335,6 +335,7 @@ def _opt_run(
     sl_pct: float,
     tp_pct: float,
     trail_pct: float,
+    hold_bars: int = 0,
     progress_cb=None,
 ) -> pd.DataFrame:
     """Grid-search over param_grid = {name: [val, ...]}; returns sorted DataFrame."""
@@ -363,6 +364,7 @@ def _opt_run(
                 fee=fee_pct / 100.0, slippage=slippage_pct / 100.0,
                 stop_loss=sl_pct / 100.0, take_profit=tp_pct / 100.0,
                 trailing_stop=trail_pct / 100.0,
+                hold_bars=int(hold_bars),
             )
             m = calculate_metrics(ec, trades, float(initial_capital))
             pf_raw = m.get("profit_factor", 0)
@@ -815,37 +817,6 @@ class MyStrategy(BaseStrategy):
                     st.error(f"❌  {_st['message']}")
             if _exch != "bybit":
                 st.markdown("---")
-
-    # ── 🔜 Бумажная торговля ─────────────────────────────────────────────────
-    with st.expander("🔜  Бумажная торговля", expanded=False):
-        st.markdown(
-            "<div style='background:#0d1117;border:1px solid #30363d;"
-            "border-radius:6px;padding:8px 12px;text-align:center;"
-            "color:#8b949e;font-size:12px;margin-bottom:10px;'>"
-            "🔜 &nbsp; В разработке</div>",
-            unsafe_allow_html=True,
-        )
-        st.markdown("""
-        **Что будет доступно:**
-        - 📡 Подключение к бирже по API
-        - ▶️ Запуск стратегии на живых данных
-        - 📊 Виртуальный портфель без реальных сделок
-        - 🔔 Логирование сигналов и виртуальных сделок
-        - 📈 Equity curve в реальном времени
-        """)
-        st.caption("⚠️ Живая торговля остаётся заблокирована.")
-        pt1, pt2 = st.columns(2)
-        pt1.text_input("Биржа", value="binance", disabled=True, key="pt_exchange")
-        pt2.text_input("Пара", value="BTC/USDT", disabled=True, key="pt_symbol")
-        st.number_input(
-            "Виртуальный капитал (USDT)", value=10000, step=500,
-            disabled=True, key="pt_capital",
-        )
-        st.button(
-            "▶️  Запустить бумажную торговлю",
-            use_container_width=True, disabled=True,
-            help="Функция в разработке",
-        )
 
     st.divider()
     st.markdown("**Версия:** MVP · Локальный · Офлайн")
@@ -1822,6 +1793,9 @@ else:
         _opt_slip     = st.number_input("Проскальзывание (%)", 0.0, 5.0, 0.05, step=0.01, format="%.3f", key="opt_slip")
         _opt_sl       = st.number_input("Стоп-лосс (%)", 0.0, 50.0, 0.0, step=0.5, format="%.1f", key="opt_sl")
         _opt_tp       = st.number_input("Тейк-профит (%)", 0.0, 200.0, 0.0, step=0.5, format="%.1f", key="opt_tp")
+        _opt_trail    = st.number_input("Трейлинг-стоп (%)", 0.0, 50.0, 0.0, step=0.5, format="%.1f", key="opt_trail")
+        _opt_hold     = st.number_input("Hold Bars", 0, 10000, 0, step=1, key="opt_hold",
+                                        help="Принудительно закрыть через N баров. 0 = выключено.")
         st.markdown("**Метрика оптимизации**")
         _opt_metric = st.radio(
             "Оптимизировать по:",
@@ -1853,7 +1827,8 @@ else:
             try:
                 _opt_res_df = _opt_run(
                     _opt_df_bt, _opt_sel_key, _opt_grid, _opt_metric,
-                    _opt_capital, _opt_fee, _opt_slip, _opt_sl, _opt_tp, 0.0,
+                    _opt_capital, _opt_fee, _opt_slip, _opt_sl, _opt_tp, _opt_trail,
+                    hold_bars=int(_opt_hold),
                     progress_cb=_opt_prog,
                 )
                 _opt_pb.empty()
