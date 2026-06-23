@@ -701,6 +701,29 @@ def export_analysis_render_downloads(res: dict, df_source: pd.DataFrame) -> None
 _load_all_user_strategies()
 
 
+def _fmt_cls_display(cls_name: str, cls_obj=None) -> str:
+    """AdxGapStrategy → 'ADX Gap',  ThreeLittleIndiansStrategy → 'Three Little Indians'."""
+    import re as _re_fmt
+    if cls_obj is not None:
+        attr_name = getattr(cls_obj, "name", None)
+        if attr_name and isinstance(attr_name, str) and attr_name not in ("", "base"):
+            return attr_name.replace("_", " ").strip().title()
+    name = _re_fmt.sub(r"Strategy$", "", cls_name)
+    name = _re_fmt.sub(r"([a-z])([A-Z])", r"\1 \2", name)
+    name = _re_fmt.sub(r"([A-Z]+)([A-Z][a-z])", r"\1 \2", name)
+    return name.strip()
+
+
+def _fmt_custom_label(cls_name: str, cls_obj=None) -> str:
+    """Selectbox label: '🆕 Display Name — short description'."""
+    display = _fmt_cls_display(cls_name, cls_obj)
+    desc = (getattr(cls_obj, "description", "") or "").strip() if cls_obj else ""
+    if desc:
+        short = desc[:42] + "…" if len(desc) > 42 else desc
+        return f"🆕 {display} — {short}"
+    return f"🆕 {display}"
+
+
 # ─── AI ОЦЕНКА СТРАТЕГИИ (офлайн, rule-based) ─────────────────────────────────
 
 def _ai_eval_strategy(metrics: dict) -> dict:
@@ -945,27 +968,6 @@ class MyStrategy(BaseStrategy):
 | **BaseStrategy** | Базовый класс для своих стратегий в этой системе |
         """)
 
-    with st.expander("🎯 Стратегии по категориям"):
-        st.markdown("""
-**📈 Тренд** — работают когда рынок направленно движется\n
-· SMA Crossover — пересечение простых MA\n
-· EMA Crossover — то же, но с экспоненциальными MA
-
-**🔄 Возврат к среднему** — расчёт на коррекцию после перепроданности\n
-· RSI Mean Reversion — вход когда RSI < порога\n
-· MACD Momentum — пересечение MACD линий
-
-**⚡ Скальпинг (M15–1H)** — быстрые сделки на волатильности\n
-· Bollinger Scalp — отскок от нижней полосы BB\n
-· Stochastic + EMA Scalp — стохастик + тренд-фильтр\n
-· VWAP Bounce — отскок от объёмного уровня
-
-**🔃 Контртренд / Разворот**\n
-· Turtle Soup — ложный пробой N-барового минимума\n
-· 80-20 по Рашке — бар разворота настроения\n
-
-🆕 **Своя** — загрузи .py с классом BaseStrategy
-        """)
 
     st.divider()
 
@@ -1122,9 +1124,13 @@ with left_col:
         "turtle_soup":     "Ловит ложный пробой N-барового минимума: цена уходит ниже, затем возвращается — «медвежья ловушка». 4H–1D.",
         "raschke_80_20":   "Паттерн Линды Рашке: бар открывается в нижних 20% диапазона и закрывается в верхних 20% — разворотный сигнал смены настроения. 1H–4H.",
     }
-    for _cn in st.session_state.custom_strategies:
-        STRATEGY_LABELS_RU[f"custom__{_cn}"] = f"🆕 {_cn}"
+    for _cn, _ci_entry in st.session_state.custom_strategies.items():
+        _cls_entry = _ci_entry.get("cls")
+        STRATEGY_LABELS_RU[f"custom__{_cn}"] = _fmt_custom_label(_cn, _cls_entry)
         STRATEGY_CATEGORIES_MAP[f"custom__{_cn}"] = "🆕 Своя"
+        STRATEGY_TIMEFRAMES_REC[f"custom__{_cn}"] = "Любой"
+        _desc_entry = (getattr(_cls_entry, "description", "") or "").strip() if _cls_entry else ""
+        STRATEGY_DESC_FULL[f"custom__{_cn}"] = _desc_entry or f"Пользовательская стратегия: {_fmt_cls_display(_cn, _cls_entry)}"
 
     # Category filter (pills)
     _cat_all_opts = ["Все", "📈 Тренд", "🔄 Возврат к среднему", "⚡ Скальпинг", "🔃 Контртренд"]
@@ -1161,11 +1167,6 @@ with left_col:
     _cat_badge = STRATEGY_CATEGORIES_MAP.get(selected_key, "")
     _tf_rec = STRATEGY_TIMEFRAMES_REC.get(selected_key, "")
     _desc_full = STRATEGY_DESC_FULL.get(selected_key, "")
-    if selected_key.startswith("custom__"):
-        _cn_desc = selected_key[8:]
-        _ci_desc = st.session_state.custom_strategies.get(_cn_desc, {})
-        _desc_full = getattr(_ci_desc.get("cls"), "description", "") or "Пользовательская стратегия"
-        _tf_rec = "Любой"
     if _desc_full:
         _tf_html = (
             f"<span style='background:#0d3349;color:#42a5f5;border-radius:4px;padding:2px 7px;"
@@ -1447,6 +1448,60 @@ with left_col:
         )
     else:
         st.info("⏳  Данные не загружены")
+
+
+# ─── ДИНАМИЧЕСКИЙ РАЗДЕЛ ИНСТРУКЦИИ: СТРАТЕГИИ ────────────────────────────────
+# Runs after left_col so STRATEGY_LABELS_RU / STRATEGY_CATEGORIES_MAP are in scope
+with st.sidebar:
+    _dyn_cat_order = [
+        "📈 Тренд",
+        "🔄 Возврат к среднему",
+        "⚡ Скальпинг",
+        "🔃 Контртренд",
+        "🆕 Своя",
+    ]
+    _dyn_cat_hints = {
+        "📈 Тренд":             "Работают когда рынок направленно движется",
+        "🔄 Возврат к среднему": "Расчёт на коррекцию после перепроданности",
+        "⚡ Скальпинг":          "Быстрые сделки на волатильности (M15–1H)",
+        "🔃 Контртренд":         "Ловля разворотов и ложных пробоев",
+        "🆕 Своя":               "Ваши загруженные стратегии",
+    }
+    _dyn_cat_buckets: dict[str, list] = {c: [] for c in _dyn_cat_order}
+    for _dk, _dlabel in STRATEGY_LABELS_RU.items():
+        _dcat = STRATEGY_CATEGORIES_MAP.get(_dk, "")
+        if _dcat in _dyn_cat_buckets:
+            _ddesc = STRATEGY_DESC_FULL.get(_dk, "")
+            _dtf   = STRATEGY_TIMEFRAMES_REC.get(_dk, "")
+            _dyn_cat_buckets[_dcat].append((_dlabel, _ddesc, _dtf))
+
+    _total_strats = sum(len(v) for v in _dyn_cat_buckets.values())
+    with st.expander(f"🎯  Стратегии по категориям ({_total_strats})", expanded=False):
+        for _dcat in _dyn_cat_order:
+            _items = _dyn_cat_buckets[_dcat]
+            if not _items:
+                continue
+            _hint = _dyn_cat_hints.get(_dcat, "")
+            st.markdown(
+                f"<div style='margin:8px 0 4px;'>"
+                f"<span style='font-weight:700;font-size:13px;'>{_dcat}</span>"
+                f"<span style='color:#666;font-size:11px;margin-left:6px;'>{_hint}</span></div>",
+                unsafe_allow_html=True,
+            )
+            for _dlabel, _ddesc, _dtf in _items:
+                _dtf_tag = (
+                    f"<span style='color:#42a5f5;font-size:10px;margin-left:4px;'>⏱{_dtf}</span>"
+                    if _dtf else ""
+                )
+                _desc_short = _ddesc[:55] + "…" if len(_ddesc) > 55 else _ddesc
+                st.markdown(
+                    f"<div style='padding:5px 0 5px 8px;border-left:2px solid #21262d;"
+                    f"margin-bottom:4px;'>"
+                    f"<span style='font-size:12px;font-weight:600;color:#c9d1d9;'>{_dlabel}</span>"
+                    f"{_dtf_tag}<br>"
+                    f"<span style='font-size:11px;color:#8b949e;'>{_desc_short}</span></div>",
+                    unsafe_allow_html=True,
+                )
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -2323,24 +2378,21 @@ else:
     _cmp_df_full = _cmp_res_bt.get("df_bt")
     _cmp_bp = _cmp_res_bt["backtest_params"]
 
+    # Build comparison labels from STRATEGY_LABELS_RU (includes custom strategies)
     _CMP_LABELS: dict[str, str] = {
-        "sma_cross":       "SMA Crossover",
-        "ema_cross":       "EMA Crossover",
-        "rsi":             "RSI Mean Reversion",
-        "macd":            "MACD Momentum",
-        "bollinger_scalp": "Bollinger Scalp",
-        "stoch_ema_scalp": "Stochastic + EMA Scalp",
-        "vwap_bounce":     "VWAP Bounce",
-        "turtle_soup":     "Turtle Soup",
-        "raschke_80_20":   "80-20 Рашке",
+        k: v for k, v in STRATEGY_LABELS_RU.items()
+        if not k.startswith("custom__")   # built-ins only (custom use default params)
     }
+    _cmp_defaults = list(_CMP_LABELS.values())[:4]
+
     _cmp_col1, _cmp_col2 = st.columns([3, 1])
     with _cmp_col1:
         _cmp_selected = st.multiselect(
             "Стратегии для сравнения",
             list(_CMP_LABELS.values()),
-            default=list(_CMP_LABELS.values())[:4],
+            default=_cmp_defaults,
             key="cmp_strategies",
+            help="Каждая стратегия запускается с параметрами по умолчанию на тех же данных",
         )
     with _cmp_col2:
         _cmp_with_bh = st.checkbox("+ Buy & Hold", value=True, key="cmp_bh")
