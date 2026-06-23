@@ -1742,9 +1742,12 @@ else:
                     _st = max(1, (_hi - _lo) // 10)
                     _opt_param_defs[_pn] = (_lo, _hi, _st, "int")
                 elif isinstance(_pd, float):
-                    _lo = round(_pd * 0.5, 6)
-                    _hi = round(_pd * 2.0, 6)
-                    _st = round((_hi - _lo) / 10.0, 6)
+                    if _pd == 0.0:
+                        _lo, _hi, _st = 0.0, 0.5, 0.05
+                    else:
+                        _lo = round(_pd * 0.5, 6)
+                        _hi = round(_pd * 2.0, 6)
+                        _st = max(0.001, round((_hi - _lo) / 10.0, 6))
                     _opt_param_defs[_pn] = (_lo, _hi, _st, "float")
         else:
             _opt_param_defs = _OPT_DEFAULTS.get(_opt_sel_key, {})
