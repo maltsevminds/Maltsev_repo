@@ -25,6 +25,7 @@ SQLite logging, pytest, Telegram alerts.
 | Backtest engine | `momentum_scalp/backtester.py` | ✅ done |
 | Reporting (CSV + equity chart) | `momentum_scalp/reporting.py` | ✅ done |
 | Optimizer (grid + walk-forward) | `momentum_scalp/optimizer.py` | ✅ done |
+| Dashboard (live monitoring) | `momentum_scalp/dashboard.py` | ✅ done |
 
 ## Install (macOS)
 
@@ -90,6 +91,20 @@ python -m momentum_scalp.main --mode live
 ```
 
 *(The CLI is delivered in a later stage; modes 3–4 need keys in `.env`.)*
+
+## Dashboard
+
+Live monitoring over the bot's SQLite DB — KPIs, equity curve, open positions,
+recent trades and the event log. Self-contained HTML (no Streamlit/Flask).
+
+```bash
+# auto-refreshing server (reads the DB live while the bot runs)
+python -m momentum_scalp.dashboard --db data/bot.sqlite --serve 8787
+#   -> open http://localhost:8787
+
+# or write a one-off snapshot
+python -m momentum_scalp.dashboard --db data/bot.sqlite --out dashboard.html --mode paper
+```
 
 ## Tests
 
