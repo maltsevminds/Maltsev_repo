@@ -20,7 +20,7 @@ SQLite logging, pytest, Telegram alerts.
 | Executor (idempotent+retry) | `momentum_scalp/executor.py` | ⏳ stub |
 | PositionTracker (reconcile) | `momentum_scalp/position_tracker.py` | ⏳ stub |
 | Watchdog (kill-switch/TG) | `momentum_scalp/watchdog.py` | ⏳ stub |
-| Logger/DB (SQLite) | `momentum_scalp/db.py` | ⏳ stub |
+| Logger/DB (SQLite) | `momentum_scalp/db.py` | ✅ done |
 | CLI entrypoint | `momentum_scalp/main.py` | ⏳ stub |
 
 ## Install (macOS)
@@ -87,7 +87,8 @@ Current coverage: `RiskManager` (sizing, leverage cap, daily/weekly limits,
 consecutive-stop pause, cluster/position caps), `Config` validation,
 `Indicators` (EMA/SMA/RSI/ATR/ADX/Donchian + bias/entry feature bundles) and
 `DataFeed` helpers (OHLCV framing, gap detection, paginated history, closed-bar
-streaming) and `SignalEngine` (every entry gate + stop/target math).
+streaming), `SignalEngine` (every entry gate + stop/target math) and the
+`Database` (order idempotency, position lifecycle, equity/events).
 
 ## Strategy summary
 
