@@ -125,9 +125,10 @@ def test_live_entry_sends_order_and_sets_leverage():
     entry, stop = asyncio.run(ex.open_position(make_position(db), leverage=7))
     assert fake.leverage_set == (7, "BTC/USDT")
     assert entry.price == 100.5 and entry.exchange_order_id == "1"
-    # stop went out as a reduce-only STOP_MARKET
+    # stop went out as a reduce-only trigger order (ccxt-unified, portable)
     stop_call = fake.create_calls[1]
-    assert stop_call[0] == "STOP_MARKET" and stop_call[3]["reduceOnly"] is True
+    assert stop_call[0] == "market" and stop_call[3]["reduceOnly"] is True
+    assert "stopLossPrice" in stop_call[3]
     db.close()
 
 

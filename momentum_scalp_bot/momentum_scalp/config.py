@@ -37,8 +37,10 @@ class _Base(BaseModel):
 
 
 class ExchangeCfg(_Base):
-    id: str = "binanceusdm"
+    id: str = "binanceusdm"            # any ccxt.pro exchange id (e.g. bybit)
     testnet: bool = True
+    default_type: str = "future"       # 'future' (binance USDM) | 'swap' (bybit linear)
+    options: Dict[str, object] = Field(default_factory=dict)  # extra ccxt options
     live_key_env: str = "BINANCE_API_KEY"
     live_secret_env: str = "BINANCE_API_SECRET"
     testnet_key_env: str = "BINANCE_TESTNET_API_KEY"

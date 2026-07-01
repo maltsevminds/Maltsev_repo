@@ -142,10 +142,12 @@ def test_live_open_places_resting_tp1_tp2():
     asyncio.run(ex.open_position(tp, leverage=5))
 
     types = [c[0] for c in fake.calls]
-    assert types == ["market", "STOP_MARKET", "TAKE_PROFIT_MARKET", "TAKE_PROFIT_MARKET"]
+    # entry + stop + tp1 + tp2, all portable ccxt-unified market/trigger orders
+    assert types == ["market", "market", "market", "market"]
+    assert "stopLossPrice" in fake.calls[1][3]        # the protective stop
     tp1_call = fake.calls[2]
     assert tp1_call[2] == pytest.approx(5.0)          # 0.5 * 10
-    assert tp1_call[3]["reduceOnly"] is True and tp1_call[3]["stopPrice"] == 106.0
+    assert tp1_call[3]["reduceOnly"] is True and tp1_call[3]["takeProfitPrice"] == 106.0
     assert fake.calls[3][2] == pytest.approx(3.0)     # 0.3 * 10 for tp2
     db.close()
 

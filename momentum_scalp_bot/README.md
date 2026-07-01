@@ -27,6 +27,32 @@ SQLite logging, pytest, Telegram alerts.
 | Optimizer (grid + walk-forward) | `momentum_scalp/optimizer.py` | ✅ done |
 | Dashboard (live monitoring) | `momentum_scalp/dashboard.py` | ✅ done |
 
+## Quick start (one click)
+
+Double-click a launcher in Finder — it creates the venv, installs deps, deploys
+the dashboard, opens it in your browser, and starts the bot:
+
+| Shortcut | What it does |
+| --- | --- |
+| **Start Bot (paper).command** | paper mode (live data, virtual balance, no real orders) + dashboard |
+| **Start Bot (Bybit testnet).command** | Bybit **testnet** (real orders, fake money) + dashboard |
+| **Backtest + report.command** | runs a backtest and opens the equity-curve report |
+
+> First run of a `.command` may be blocked by Gatekeeper — right-click → **Open**
+> once, or `chmod +x *.command` in Terminal. Add API keys to `.env` before
+> testnet.
+
+Or use `make`:
+
+```bash
+make setup            # venv + deps + .env
+make paper            # dashboard + bot (paper)
+make testnet-bybit    # dashboard + bot (Bybit testnet)
+make backtest         # backtest + open report
+make dashboard        # just the dashboard server
+make test             # run the test suite
+```
+
 ## Install (macOS)
 
 ```bash
@@ -60,6 +86,17 @@ cp .env.example .env
 
 `.env` is git-ignored. Never commit real keys.
 
+### Exchanges
+
+The bot is exchange-agnostic via ccxt. Ships with two configs:
+
+- `config.yaml` — Binance USDⓈ-M futures (default).
+- `config.bybit.testnet.yaml` — Bybit USDT-perpetual **testnet** (keys:
+  `BYBIT_TESTNET_API_KEY` / `_SECRET` from https://testnet.bybit.com). Note
+  Bybit's ccxt symbols carry a settle suffix (`BTC/USDT:USDT`). Order placement
+  uses ccxt-unified trigger params (`stopLossPrice`/`takeProfitPrice`), so the
+  reduce-only stop and TP1/TP2 work identically on both venues.
+
 ## Running each mode
 
 All modes are selected with `--mode`; strategy/risk parameters come from
@@ -83,8 +120,9 @@ python -m momentum_scalp.main --mode backtest --data-dir ./data/hist --optimize 
 # 2) Paper — live market data, virtual balance, NO real orders
 python -m momentum_scalp.main --mode paper
 
-# 3) Testnet — Binance Futures testnet, REAL orders on fake money
-python -m momentum_scalp.main --mode testnet
+# 3) Testnet — REAL orders on fake money
+python -m momentum_scalp.main --mode testnet                               # Binance
+python -m momentum_scalp.main --mode testnet --config config.bybit.testnet.yaml  # Bybit
 
 # 4) Live — real money. LOCKED until you set confirm_live: true in config.yaml
 python -m momentum_scalp.main --mode live

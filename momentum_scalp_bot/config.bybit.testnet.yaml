@@ -1,0 +1,55 @@
+# ===========================================================================
+# Bybit USDT-perpetual (linear) TESTNET config.
+# Run:  python -m momentum_scalp.main --mode testnet --config config.bybit.testnet.yaml
+# Keys: BYBIT_TESTNET_API_KEY / BYBIT_TESTNET_API_SECRET in .env
+#       (create them at https://testnet.bybit.com -> API Management)
+# ===========================================================================
+
+mode: testnet
+confirm_live: false
+
+exchange:
+  id: bybit
+  testnet: true
+  default_type: swap          # bybit linear perpetuals
+  options:
+    defaultSubType: linear
+  testnet_key_env: BYBIT_TESTNET_API_KEY
+  testnet_secret_env: BYBIT_TESTNET_API_SECRET
+  # live_* left as defaults; not used in testnet mode.
+
+# Bybit's ccxt unified symbols for linear perps carry the :USDT settle suffix.
+symbols:
+  - BTC/USDT:USDT
+  - ETH/USDT:USDT
+  - SOL/USDT:USDT
+  - BNB/USDT:USDT
+  - XRP/USDT:USDT
+  - DOGE/USDT:USDT
+
+timeframes:
+  bias: 1h
+  entry: 5m
+
+leverage_cap: 20
+
+# Strategy / targets / risk / watchdog fall back to the same defaults as
+# config.yaml — override here only if you want different values on Bybit.
+
+# Correlation cluster must reference the Bybit symbol strings.
+risk:
+  clusters:
+    majors:
+      symbols: [BTC/USDT:USDT, ETH/USDT:USDT, SOL/USDT:USDT]
+      max: 2
+
+database:
+  path: data/bybit_testnet.sqlite
+
+watchdog:
+  ws_timeout_seconds: 30
+  reconnect_max_retries: 10
+  reconnect_backoff_seconds: 2
+
+paper:
+  initial_equity: 10000

@@ -141,7 +141,7 @@ class Executor:
             self.db.update_order(cid, status="filled", filled_qty=qty, avg_fill_price=price)
             return Fill(cid, symbol, side, qty, price, fee, purpose)
 
-        params = {"newClientOrderId": cid}
+        params = {"clientOrderId": cid}
         if reduce_only:
             params["reduceOnly"] = True
         order = await self._send(lambda: self.exchange.create_order(
@@ -169,14 +169,14 @@ class Executor:
 
         if replace:
             await self._cancel_open_stops(symbol)
+        # ccxt-unified trigger params -> portable across binanceusdm & bybit.
         params = {
-            "newClientOrderId": cid,
+            "clientOrderId": cid,
             "reduceOnly": True,
-            "stopPrice": stop_price,
-            "workingType": "MARK_PRICE",
+            "stopLossPrice": stop_price,
         }
         order = await self._send(lambda: self.exchange.create_order(
-            symbol, "STOP_MARKET", side, qty, None, params))
+            symbol, "market", side, qty, None, params))
         self.db.update_order(cid, status="open", exchange_order_id=str(order.get("id")))
         return Fill(cid, symbol, side, qty, stop_price, 0.0, purpose,
                     str(order.get("id")), resting=True)
@@ -198,13 +198,12 @@ class Executor:
             return Fill(cid, symbol, side, qty, tp_price, 0.0, purpose, resting=True)
 
         params = {
-            "newClientOrderId": cid,
+            "clientOrderId": cid,
             "reduceOnly": True,
-            "stopPrice": tp_price,
-            "workingType": "MARK_PRICE",
+            "takeProfitPrice": tp_price,
         }
         order = await self._send(lambda: self.exchange.create_order(
-            symbol, "TAKE_PROFIT_MARKET", side, qty, None, params))
+            symbol, "market", side, qty, None, params))
         self.db.update_order(cid, status="open", exchange_order_id=str(order.get("id")))
         return Fill(cid, symbol, side, qty, tp_price, 0.0, purpose,
                     str(order.get("id")), resting=True)

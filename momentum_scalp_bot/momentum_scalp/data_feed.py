@@ -93,9 +93,11 @@ def build_exchange(config: Config):
     if not hasattr(ccxtpro, config.exchange.id):
         raise ValueError(f"unknown ccxt.pro exchange id: {config.exchange.id!r}")
 
+    options = {"defaultType": config.exchange.default_type}
+    options.update(config.exchange.options)  # per-exchange extras (e.g. bybit)
     params: dict = {
         "enableRateLimit": True,
-        "options": {"defaultType": "future"},
+        "options": options,
         "newUpdates": True,  # watch_* returns only fresh deltas
     }
     if config.mode in (Mode.testnet, Mode.live):
