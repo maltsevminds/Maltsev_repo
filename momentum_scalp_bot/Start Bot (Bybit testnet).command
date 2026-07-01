@@ -3,4 +3,4 @@
 # fake money) and opens the live dashboard. Needs BYBIT_TESTNET_API_KEY /
 # BYBIT_TESTNET_API_SECRET in .env (create keys at https://testnet.bybit.com).
 cd "$(dirname "$0")"
-exec env CONFIG=config.bybit.testnet.yaml bash scripts/start.sh testnet
+exec env CONFIG=config.bybit.yaml bash scripts/start.sh testnet

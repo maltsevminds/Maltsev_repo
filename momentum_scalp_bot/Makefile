@@ -2,10 +2,10 @@
 PY ?= python3
 VENV := . .venv/bin/activate
 
-.PHONY: help setup test backtest paper testnet testnet-bybit live dashboard
+.PHONY: help setup test backtest backtest-bybit paper paper-bybit testnet testnet-bybit live dashboard
 
 help:
-	@echo "targets: setup | test | backtest | paper | testnet | testnet-bybit | live | dashboard"
+	@echo "targets: setup | test | backtest[-bybit] | paper[-bybit] | testnet[-bybit] | live | dashboard"
 
 setup:
 	$(PY) -m venv .venv
@@ -19,14 +19,20 @@ test:
 backtest:
 	$(VENV) && bash scripts/start.sh backtest
 
+backtest-bybit:
+	$(VENV) && CONFIG=config.bybit.yaml bash scripts/start.sh backtest
+
 paper:
 	$(VENV) && bash scripts/start.sh paper
+
+paper-bybit:
+	$(VENV) && CONFIG=config.bybit.yaml bash scripts/start.sh paper
 
 testnet:
 	$(VENV) && bash scripts/start.sh testnet
 
 testnet-bybit:
-	$(VENV) && CONFIG=config.bybit.testnet.yaml bash scripts/start.sh testnet
+	$(VENV) && CONFIG=config.bybit.yaml bash scripts/start.sh testnet
 
 live:
 	$(VENV) && bash scripts/start.sh live

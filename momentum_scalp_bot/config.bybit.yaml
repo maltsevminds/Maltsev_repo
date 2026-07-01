@@ -1,22 +1,25 @@
 # ===========================================================================
-# Bybit USDT-perpetual (linear) TESTNET config.
-# Run:  python -m momentum_scalp.main --mode testnet --config config.bybit.testnet.yaml
-# Keys: BYBIT_TESTNET_API_KEY / BYBIT_TESTNET_API_SECRET in .env
+# Bybit USDT-perpetual (linear). One config for every mode — pick with --mode:
+#   backtest : python -m momentum_scalp.main --mode backtest --config config.bybit.yaml
+#   paper    : python -m momentum_scalp.main --mode paper    --config config.bybit.yaml
+#   testnet  : python -m momentum_scalp.main --mode testnet  --config config.bybit.yaml
+# Keys (testnet only): BYBIT_TESTNET_API_KEY / BYBIT_TESTNET_API_SECRET in .env
 #       (create them at https://testnet.bybit.com -> API Management)
+# backtest & paper need NO keys (public data / virtual balance).
 # ===========================================================================
 
-mode: testnet
+# No hard-coded mode: --mode on the CLI selects it. confirm_live stays locked.
 confirm_live: false
 
 exchange:
   id: bybit
-  testnet: true
+  testnet: true               # only consulted in testnet mode
   default_type: swap          # bybit linear perpetuals
   options:
     defaultSubType: linear
   testnet_key_env: BYBIT_TESTNET_API_KEY
   testnet_secret_env: BYBIT_TESTNET_API_SECRET
-  # live_* left as defaults; not used in testnet mode.
+  # live_* left as defaults; not used in testnet/paper/backtest.
 
 # Bybit's ccxt unified symbols for linear perps carry the :USDT settle suffix.
 symbols:
@@ -44,7 +47,17 @@ risk:
       max: 2
 
 database:
-  path: data/bybit_testnet.sqlite
+  # Rows are tagged by mode, so paper/testnet/backtest can share this file;
+  # the dashboard's --mode filters to the run you care about.
+  path: data/bybit.sqlite
+
+backtest:
+  # Used by `--mode backtest` when downloading from Bybit (no --data-dir).
+  start: "2024-01-01"
+  end: "2024-03-01"
+  initial_equity: 10000
+  fee_rate: 0.00055          # bybit linear taker ~0.055%
+  slippage_pct: 0.0003
 
 watchdog:
   ws_timeout_seconds: 30

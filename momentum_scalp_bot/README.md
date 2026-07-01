@@ -34,7 +34,8 @@ the dashboard, opens it in your browser, and starts the bot:
 
 | Shortcut | What it does |
 | --- | --- |
-| **Start Bot (paper).command** | paper mode (live data, virtual balance, no real orders) + dashboard |
+| **Start Bot (paper).command** | paper on Binance (live data, virtual balance, no real orders) + dashboard |
+| **Start Bot (Bybit paper).command** | paper on **Bybit** (live Bybit data, virtual balance, no keys needed) + dashboard |
 | **Start Bot (Bybit testnet).command** | Bybit **testnet** (real orders, fake money) + dashboard |
 | **Backtest + report.command** | runs a backtest and opens the equity-curve report |
 
@@ -91,11 +92,23 @@ cp .env.example .env
 The bot is exchange-agnostic via ccxt. Ships with two configs:
 
 - `config.yaml` — Binance USDⓈ-M futures (default).
-- `config.bybit.testnet.yaml` — Bybit USDT-perpetual **testnet** (keys:
-  `BYBIT_TESTNET_API_KEY` / `_SECRET` from https://testnet.bybit.com). Note
-  Bybit's ccxt symbols carry a settle suffix (`BTC/USDT:USDT`). Order placement
-  uses ccxt-unified trigger params (`stopLossPrice`/`takeProfitPrice`), so the
-  reduce-only stop and TP1/TP2 work identically on both venues.
+- `config.bybit.yaml` — Bybit USDT-perpetual (linear). **One file, every mode**
+  — `--mode` selects it:
+
+  ```bash
+  # backtest — downloads Bybit candles for the window in the config (no keys)
+  python -m momentum_scalp.main --mode backtest --config config.bybit.yaml --report-dir results
+  # paper — live Bybit data, virtual balance, no real orders (no keys)
+  python -m momentum_scalp.main --mode paper   --config config.bybit.yaml
+  # testnet — real orders on fake money (needs BYBIT_TESTNET_* keys)
+  python -m momentum_scalp.main --mode testnet --config config.bybit.yaml
+  ```
+
+  Keys (testnet only): `BYBIT_TESTNET_API_KEY` / `_SECRET` from
+  https://testnet.bybit.com. Bybit's ccxt symbols carry a settle suffix
+  (`BTC/USDT:USDT`). Order placement uses ccxt-unified trigger params
+  (`stopLossPrice`/`takeProfitPrice`), so the reduce-only stop and TP1/TP2 work
+  identically on both venues.
 
 ## Running each mode
 
@@ -122,7 +135,7 @@ python -m momentum_scalp.main --mode paper
 
 # 3) Testnet — REAL orders on fake money
 python -m momentum_scalp.main --mode testnet                               # Binance
-python -m momentum_scalp.main --mode testnet --config config.bybit.testnet.yaml  # Bybit
+python -m momentum_scalp.main --mode testnet --config config.bybit.yaml           # Bybit
 
 # 4) Live — real money. LOCKED until you set confirm_live: true in config.yaml
 python -m momentum_scalp.main --mode live
