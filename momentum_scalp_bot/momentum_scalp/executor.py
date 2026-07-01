@@ -68,7 +68,12 @@ class Executor:
     async def open_position(
         self, position: TrackedPosition, leverage: int
     ) -> tuple[Fill, Fill]:
-        """Enter (market) then immediately place the reduce-only stop."""
+        """Enter (market) then immediately place the reduce-only stop.
+
+        In live/testnet the TP1/TP2 take-profits are also placed as resting
+        reduce-only orders so exits happen on the exchange (fills arrive via
+        watch_orders). In sim mode TPs are handled by the price-driven ladder,
+        so they are not pre-placed here."""
         entry_side = "buy" if position.side is Side.long else "sell"
         exit_side = "sell" if position.side is Side.long else "buy"
         pid, sym, qty = position.position_id, position.symbol, position.initial_qty
@@ -82,6 +87,13 @@ class Executor:
         stop = await self._stop_market(
             pid, sym, exit_side, qty, position.stop, self._stop_purpose(pid),
         )
+        if self._live:
+            await self._take_profit_market(
+                pid, sym, exit_side, position.tp1_close_pct * qty, position.tp1, "tp1"
+            )
+            await self._take_profit_market(
+                pid, sym, exit_side, position.tp2_close_pct * qty, position.tp2, "tp2"
+            )
         return entry, stop
 
     async def execute_action(
@@ -169,6 +181,39 @@ class Executor:
         return Fill(cid, symbol, side, qty, stop_price, 0.0, purpose,
                     str(order.get("id")), resting=True)
 
+    async def _take_profit_market(
+        self, pid: int, symbol: str, side: str, qty: float, tp_price: float,
+        purpose: str,
+    ) -> Fill:
+        """Resting reduce-only TAKE_PROFIT_MARKET (live only; sim uses the
+        price-driven ladder)."""
+        cid = self._client_id(pid, purpose)
+        self.db.record_order(OrderRow(
+            client_order_id=cid, position_id=pid, symbol=symbol, side=side,
+            type="take_profit_market", qty=qty, price=tp_price, mode=self.mode.value,
+            purpose=purpose, reduce_only=True,
+        ))
+        if not self._live:
+            self.db.update_order(cid, status="open")
+            return Fill(cid, symbol, side, qty, tp_price, 0.0, purpose, resting=True)
+
+        params = {
+            "newClientOrderId": cid,
+            "reduceOnly": True,
+            "stopPrice": tp_price,
+            "workingType": "MARK_PRICE",
+        }
+        order = await self._send(lambda: self.exchange.create_order(
+            symbol, "TAKE_PROFIT_MARKET", side, qty, None, params))
+        self.db.update_order(cid, status="open", exchange_order_id=str(order.get("id")))
+        return Fill(cid, symbol, side, qty, tp_price, 0.0, purpose,
+                    str(order.get("id")), resting=True)
+
+    async def cancel_symbol_orders(self, symbol: str) -> None:
+        """Cancel all resting orders for a symbol (cleanup after a close)."""
+        if self._live:
+            await self._cancel_open_stops(symbol)
+
     # ------------------------------------------------------------------ #
     # Live helpers
     # ------------------------------------------------------------------ #
@@ -233,6 +278,34 @@ def _fill_from_row(row) -> Fill:
         purpose=row["purpose"],
         exchange_order_id=row["exchange_order_id"],
     )
+
+
+def parse_client_id(cid: str) -> Optional[tuple[int, str]]:
+    """Decode 'msb-{mode}-{pid}-{purpose}' -> (position_id, purpose).
+
+    Returns None for ids that aren't ours. ``purpose`` may itself contain a
+    dash (e.g. 'stop-1')."""
+    if not cid or not cid.startswith("msb-"):
+        return None
+    parts = cid.split("-")
+    if len(parts) < 4:
+        return None
+    try:
+        pid = int(parts[2])
+    except ValueError:
+        return None
+    return pid, "-".join(parts[3:])
+
+
+def fill_kind(purpose: str) -> Optional[str]:
+    """Map an order purpose to a ladder event kind for TrackedPosition.on_fill."""
+    if purpose.startswith("tp1"):
+        return "tp1"
+    if purpose.startswith("tp2"):
+        return "tp2"
+    if purpose.startswith("stop"):
+        return "stop"
+    return None  # 'entry' and anything else are not ladder-advancing fills
 
 
 def _fee_of(order: dict) -> float:

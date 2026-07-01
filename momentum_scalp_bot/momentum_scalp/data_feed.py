@@ -243,6 +243,36 @@ class DataFeed:
         self._buffers[(symbol, timeframe)] = df
         return df.iloc[-1]
 
+    # -- order updates (WS, reconnecting) ------------------------------ #
+    async def stream_orders(self):
+        """Yield exchange order-update dicts (fills, cancels) forever, with the
+        same exponential-backoff reconnect as the OHLCV stream. Used in
+        testnet/live so ladder exits are driven by real fills."""
+        ex = self._ensure_exchange()
+        retries = 0
+        wcfg = self.cfg.watchdog
+        while True:
+            try:
+                orders = await ex.watch_orders()
+                self.last_message_ts = time.monotonic()
+                retries = 0
+                for order in orders:
+                    yield order
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:  # noqa: BLE001 - reconnect on anything transient
+                retries += 1
+                if retries > wcfg.reconnect_max_retries:
+                    log.error("watch_orders: giving up after %d retries: %s",
+                              retries - 1, exc)
+                    raise
+                backoff = min(
+                    wcfg.reconnect_backoff_seconds * (2 ** (retries - 1)), 60.0
+                )
+                log.warning("watch_orders error (%s); reconnect #%d in %.1fs",
+                            exc, retries, backoff)
+                await asyncio.sleep(backoff)
+
     # -- funding ------------------------------------------------------- #
     async def fetch_funding_rate(self, symbol: str) -> float:
         """Current funding rate as a fraction (0.0001 == 0.01%)."""

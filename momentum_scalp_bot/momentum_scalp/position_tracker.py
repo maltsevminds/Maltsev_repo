@@ -191,6 +191,61 @@ class TrackedPosition:
 
         return actions
 
+    # -- event-driven path (testnet/live: fills come from the exchange) - #
+    def on_fill(self, kind: str, price: float) -> List[PositionAction]:
+        """Advance the ladder from a real exchange fill of one of our resting
+        reduce-only orders. ``kind`` is 'tp1' | 'tp2' | 'stop'. Returns the
+        follow-up orders to place (move the stop; the runner's trail is then
+        ratcheted per-bar via :meth:`update_trail`)."""
+        if self.closed or self.remaining_qty <= 0:
+            return []
+
+        if kind == "tp1" and not self.tp1_done:
+            q = self._round(self.tp1_close_pct * self.initial_qty)
+            self.realized_pnl += _pnl(self.side, self.entry, price, q)
+            self.remaining_qty = self._round(self.remaining_qty - q)
+            self.tp1_done = True
+            self.stop = self.entry
+            return [PositionAction("move_stop", self.symbol, "tp1_move_be", price=self.entry)]
+
+        if kind == "tp2" and self.tp1_done and not self.tp2_done:
+            q = self._round(self.tp2_close_pct * self.initial_qty)
+            self.realized_pnl += _pnl(self.side, self.entry, price, q)
+            self.remaining_qty = self._round(self.remaining_qty - q)
+            self.tp2_done = True
+            # Trailing is initialized on the next bar by update_trail(); until
+            # then the resting BE stop remains the protection.
+            self.trailing_stop = None
+            return []
+
+        if kind == "stop":
+            reason = "stop" if not self.tp1_done else (
+                "be_stop" if not self.tp2_done else "trail_stop"
+            )
+            self._close_remaining(price, reason)
+            return []  # exchange already filled it; nothing more to send
+
+        return []
+
+    def update_trail(self, high: float, low: float, atr: float) -> Optional[PositionAction]:
+        """Runner-only: ratchet the trailing stop. Returns a move_stop action
+        when the stop should be re-placed on the exchange, else None. Does NOT
+        stop out — that happens when the exchange STOP_MARKET fills."""
+        if self.closed or not self.tp2_done or self.remaining_qty <= 0:
+            return None
+        long = self.side is Side.long
+        direction = self.side.sign
+        fav = high if long else low
+        candidate = fav - direction * self.runner_trail_atr_mult * atr
+        if self.trailing_stop is None:
+            self.trailing_stop = candidate
+            return PositionAction("move_stop", self.symbol, "runner_trail_init", price=candidate)
+        new_trail = max(self.trailing_stop, candidate) if long else min(self.trailing_stop, candidate)
+        if new_trail != self.trailing_stop:
+            self.trailing_stop = new_trail
+            return PositionAction("move_stop", self.symbol, "runner_trail", price=new_trail)
+        return None
+
     # -- helpers ------------------------------------------------------- #
     def _close_remaining(self, price: float, reason: str) -> PositionAction:
         q = self.remaining_qty
@@ -258,6 +313,35 @@ class PositionManager:
 
     def on_price(self, symbol: str, price: float, atr: float) -> List[PositionAction]:
         return self.on_bar(symbol, price, price, atr)
+
+    def apply_fill(self, symbol: str, kind: str, price: float) -> List[PositionAction]:
+        """Event-driven (testnet/live): advance the ladder from an exchange
+        fill and persist. Follow-up move_stop actions are returned for the
+        Executor to place; the position is dropped once fully closed."""
+        tp = self.positions.get(symbol)
+        if tp is None:
+            return []
+        actions = tp.on_fill(kind, price)
+        self._persist(tp)
+        if tp.closed:
+            self.positions.pop(symbol, None)
+        return actions
+
+    def update_trail(self, symbol: str, high: float, low: float, atr: float) -> Optional[PositionAction]:
+        """Runner-only trailing ratchet for the live path (no simulated fills)."""
+        tp = self.positions.get(symbol)
+        if tp is None:
+            return None
+        action = tp.update_trail(high, low, atr)
+        if action is not None:
+            self._persist(tp)
+        return action
+
+    def position_by_id(self, position_id: int) -> Optional[TrackedPosition]:
+        for tp in self.positions.values():
+            if tp.position_id == position_id:
+                return tp
+        return None
 
     def force_close(self, symbol: str, price: float, reason: str) -> Optional[PositionAction]:
         """Flatten a position immediately at ``price`` (e.g. the weekly-limit

@@ -26,7 +26,7 @@ from .backtester import BacktestEngine
 from .config import Config, Mode, load_config
 from .data_feed import DataFeed, timeframe_to_ms
 from .db import Database
-from .executor import Executor
+from .executor import Executor, fill_kind, parse_client_id
 from .indicators import OHLCV_COLS, enrich_bias, enrich_entry
 from .position_tracker import PositionManager
 from .risk_manager import RiskManager
@@ -34,6 +34,16 @@ from .signal_engine import SignalEngine
 from .watchdog import Watchdog, build_notifier
 
 log = logging.getLogger("momentum_scalp")
+
+
+def order_ts(order: dict):
+    """Best-effort UTC timestamp from a ccxt order dict (ms epoch), else now."""
+    import datetime as _dt
+
+    ms = order.get("timestamp")
+    if ms:
+        return _dt.datetime.fromtimestamp(ms / 1000, tz=_dt.timezone.utc)
+    return _dt.datetime.now(tz=_dt.timezone.utc)
 
 
 # --------------------------------------------------------------------------- #
@@ -165,9 +175,13 @@ class LiveTrader:
         await self.watchdog.alert(
             f"▶️ momentum-scalp starting in {self.mode.value} mode", kind="startup"
         )
+        tasks = []
         try:
             tasks = [asyncio.create_task(self._run_symbol(s)) for s in self.cfg.symbols]
             tasks.append(asyncio.create_task(self._watch_loop()))
+            if self.cfg.is_live_orders:
+                # testnet/live: ladder exits fill on the exchange -> react to them.
+                tasks.append(asyncio.create_task(self._orders_loop()))
             await self._stop.wait()
         finally:
             for t in tasks:
@@ -193,19 +207,30 @@ class LiveTrader:
         bar = feats.iloc[-1]
         ts = bar.name
 
-        # Manage an open position first.
+        # 1) Manage an open position.
         tp = self.mgr.positions.get(symbol)
         if tp is not None:
-            actions = self.mgr.on_bar(symbol, float(bar["high"]), float(bar["low"]), float(bar["atr"]))
-            for a in actions:
-                await self.executor.execute_action(tp, a)
-            if tp.closed:
-                self.rm.register_close(symbol, tp.realized_pnl, ts, was_stop=tp.was_stopped_out)
-                self.db.record_equity(self.rm.equity, self.rm.high_water_mark, self.mode.value, ts=ts)
-                return
+            if self.cfg.is_live_orders:
+                # Exits are resting exchange orders; here we only ratchet the
+                # runner's trailing stop and re-place it when it moves.
+                action = self.mgr.update_trail(
+                    symbol, float(bar["high"]), float(bar["low"]), float(bar["atr"]))
+                if action is not None:
+                    await self.executor.execute_action(tp, action)
+            else:
+                # paper: simulate fills by crossing price.
+                actions = self.mgr.on_bar(
+                    symbol, float(bar["high"]), float(bar["low"]), float(bar["atr"]))
+                for a in actions:
+                    await self.executor.execute_action(tp, a)
+                if tp.closed:
+                    await self._book_close(symbol, tp, ts)
+                    return
 
-        # Entry.
+        # 2) Entry.
         if symbol in self.mgr.positions or not self.rm.can_open(symbol, ts, self.mgr.open_symbols):
+            return
+        if self.rm.must_flatten(ts):
             return
         bias_df = enrich_bias(self.feed.buffer(symbol, tf1h), self.cfg.strategy)
         bias = int(bias_df["bias"].iloc[-1]) if len(bias_df) else 0
@@ -221,6 +246,40 @@ class LiveTrader:
         await self.watchdog.alert(
             f"📈 {sig.side.value} {symbol} @ {sig.entry} stop {sig.targets.stop}",
             kind="entry", symbol=symbol,
+        )
+
+    async def _orders_loop(self) -> None:
+        """Live path: map exchange fills of our resting reduce-only orders onto
+        the ladder (TP1 -> move stop to BE; TP2 -> start runner; stop -> close)."""
+        async for order in self.feed.stream_orders():
+            if str(order.get("status")) != "closed":  # only fully-filled orders
+                continue
+            cid = order.get("clientOrderId") or order.get("clientOrderID")
+            parsed = parse_client_id(str(cid) if cid else "")
+            if parsed is None:
+                continue
+            pid, purpose = parsed
+            kind = fill_kind(purpose)
+            if kind is None:
+                continue
+            tp = self.mgr.position_by_id(pid)
+            if tp is None:
+                continue
+            price = float(order.get("average") or order.get("price")
+                          or order.get("stopPrice") or tp.entry)
+            follow_ups = self.mgr.apply_fill(tp.symbol, kind, price)
+            for a in follow_ups:
+                await self.executor.execute_action(tp, a)
+            if tp.closed:
+                await self._book_close(tp.symbol, tp, order_ts(order))
+
+    async def _book_close(self, symbol: str, tp, ts) -> None:
+        await self.executor.cancel_symbol_orders(symbol)
+        self.rm.register_close(symbol, tp.realized_pnl, ts, was_stop=tp.was_stopped_out)
+        self.db.record_equity(self.rm.equity, self.rm.high_water_mark, self.mode.value, ts=ts)
+        await self.watchdog.alert(
+            f"✅ closed {symbol} pnl={tp.realized_pnl:.2f} (equity ${self.rm.equity:,.2f})",
+            kind="close", symbol=symbol,
         )
 
     async def _watch_loop(self) -> None:

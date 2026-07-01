@@ -98,6 +98,19 @@ streaming), `SignalEngine` (every entry gate + stop/target math) and the
 (kill-switch, notifiers), the `BacktestEngine` (end-to-end run + stats) and the
 `main` CLI (CSV loading, backtest dispatch, live safety lock). **112 tests.**
 
+## Execution model
+
+- **backtest / paper** — fills are *simulated* by crossing price: the
+  PositionTracker's price-driven ladder (`on_bar`) decides when TP1/TP2/stop
+  hit, and the Executor books them at the level with configured fee/slippage.
+- **testnet / live** — exits are *real resting orders*. On entry the Executor
+  places the reduce-only `STOP_MARKET` and reduce-only `TAKE_PROFIT_MARKET`
+  TP1/TP2 on the exchange; fills stream back via `watch_orders` and drive the
+  ladder event-driven (TP1 fill → move stop to break-even; TP2 fill → start the
+  runner; stop fill → close). The runner's trailing stop is ratcheted per
+  closed bar and re-placed via cancel+replace. The Watchdog kill-switch
+  flattens everything if the feed goes silent with a position open.
+
 ## Backtest note
 
 Funding-rate history is not replayed in backtest, so the `|funding| < 0.05%`
