@@ -67,13 +67,20 @@ class BacktestEngine:
         self.signal = SignalEngine(config)
         self.mgr = PositionManager(config, self.db, mode=self.mode)
         self.executor = Executor(config, self.db)
+        self.trade_from: pd.Timestamp | None = None
 
-    def run(self, data5: Dict[str, pd.DataFrame], data1h: Dict[str, pd.DataFrame]) -> BacktestResult:
+    def run(
+        self,
+        data5: Dict[str, pd.DataFrame],
+        data1h: Dict[str, pd.DataFrame],
+        trade_from: pd.Timestamp | None = None,
+    ) -> BacktestResult:
         import asyncio
 
-        return asyncio.run(self._run_async(data5, data1h))
+        return asyncio.run(self._run_async(data5, data1h, trade_from))
 
-    async def _run_async(self, data5, data1h) -> BacktestResult:
+    async def _run_async(self, data5, data1h, trade_from=None) -> BacktestResult:
+        self.trade_from = trade_from  # entries only allowed at/after this ts
         # Precompute features + bias per symbol.
         frames: Dict[str, pd.DataFrame] = {}
         bias: Dict[str, pd.Series] = {}
@@ -134,6 +141,9 @@ class BacktestEngine:
         return False
 
     async def _maybe_enter(self, sym, ts, bar, bias, fees) -> None:
+        # Walk-forward: earlier bars only warm the indicators; no entries yet.
+        if self.trade_from is not None and ts < self.trade_from:
+            return
         if self.rm.must_flatten(ts):
             return
         decision = self.rm.can_open(sym, ts, self.mgr.open_symbols)

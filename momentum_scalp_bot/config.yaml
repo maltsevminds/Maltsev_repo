@@ -93,3 +93,18 @@ backtest:
 
 paper:
   initial_equity: 10000
+
+optimize:
+  # Objective: any key of the backtest stats. max_drawdown_pct is minimized;
+  # everything else (total_return_pct, profit_factor, win_rate, ...) maximized.
+  metric: total_return_pct
+  top: 10                     # how many leaders to print
+  walk_forward:
+    train: 3000              # in-sample bars per fold
+    test: 1000               # out-of-sample bars per fold
+    step: 1000               # roll size
+  # Search space: dotted config paths -> candidate values.
+  grid:
+    strategy.adx_min: [20, 23, 26]
+    strategy.atr_stop_mult: [1.0, 1.2, 1.5]
+    strategy.donchian_period: [15, 20, 25]

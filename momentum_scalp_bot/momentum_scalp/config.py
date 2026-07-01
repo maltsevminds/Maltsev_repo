@@ -139,6 +139,23 @@ class PaperCfg(_Base):
     initial_equity: float = Field(10000, gt=0)
 
 
+class WalkForwardCfg(_Base):
+    train: int = Field(3000, ge=1)   # in-sample bars
+    test: int = Field(1000, ge=1)    # out-of-sample bars
+    step: int = Field(1000, ge=1)    # roll size
+
+
+class OptimizeCfg(_Base):
+    # Objective metric (a key of the backtest stats dict). max_drawdown_pct is
+    # minimized; every other metric is maximized.
+    metric: str = "total_return_pct"
+    top: int = Field(10, ge=1)       # how many leaders to report
+    walk_forward: WalkForwardCfg = Field(default_factory=WalkForwardCfg)
+    # Dotted config paths -> list of candidate values, e.g.
+    #   {"strategy.adx_min": [20, 23, 26], "strategy.atr_stop_mult": [1.0, 1.2]}
+    grid: Dict[str, List] = Field(default_factory=dict)
+
+
 # --------------------------------------------------------------------------- #
 # Root config
 # --------------------------------------------------------------------------- #
@@ -157,6 +174,7 @@ class Config(_Base):
     watchdog: WatchdogCfg = Field(default_factory=WatchdogCfg)
     backtest: BacktestCfg = Field(default_factory=BacktestCfg)
     paper: PaperCfg = Field(default_factory=PaperCfg)
+    optimize: OptimizeCfg = Field(default_factory=OptimizeCfg)
 
     @field_validator("symbols")
     @classmethod

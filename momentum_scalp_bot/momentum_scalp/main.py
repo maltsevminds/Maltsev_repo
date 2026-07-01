@@ -28,6 +28,7 @@ from .data_feed import DataFeed, timeframe_to_ms
 from .db import Database
 from .executor import Executor, fill_kind, parse_client_id
 from .indicators import OHLCV_COLS, enrich_bias, enrich_entry
+from .optimizer import metric_value
 from .position_tracker import PositionManager
 from .risk_manager import RiskManager
 from .signal_engine import SignalEngine
@@ -132,6 +133,58 @@ def run_backtest(config: Config, data_dir: Optional[str], report_dir: Optional[s
         print("\nreports written:")
         for name, p in paths.items():
             print(f"  {name:10s} {p}")
+    return 0
+
+
+def _load_backtest_data(config: Config, data_dir: Optional[str]):
+    tf5, tf1h = config.timeframes.entry, config.timeframes.bias
+    if data_dir:
+        data5 = load_from_dir(data_dir, config.symbols, tf5)
+        data1h = load_from_dir(data_dir, config.symbols, tf1h)
+    else:
+        data5 = asyncio.run(download_window(config, tf5))
+        data1h = asyncio.run(download_window(config, tf1h))
+    symbols = [s for s in config.symbols if s in data5 and s in data1h]
+    return {s: data5[s] for s in symbols}, {s: data1h[s] for s in symbols}, symbols
+
+
+def run_optimize(config: Config, data_dir: Optional[str], kind: str) -> int:
+    from .optimizer import grid_search, walk_forward
+
+    data5, data1h, symbols = _load_backtest_data(config, data_dir)
+    if not symbols:
+        log.error("no usable data for optimization")
+        return 2
+    if not config.optimize.grid:
+        log.error("optimize.grid is empty in config.yaml — nothing to search")
+        return 2
+    metric = config.optimize.metric
+
+    if kind == "grid":
+        ranked = grid_search(config, data5, data1h)
+        print(f"\n=== Grid search ({len(ranked)} combos, metric={metric}) ===")
+        for gp in ranked[: config.optimize.top]:
+            params = ", ".join(f"{k}={v}" for k, v in sorted(gp.overrides.items()))
+            print(f"  {metric}={metric_value(gp.stats, metric):>8.3f}  "
+                  f"trades={gp.stats['trades']:>3}  "
+                  f"PF={gp.stats['profit_factor']:.2f}  "
+                  f"maxDD={gp.stats['max_drawdown_pct']:.2f}%  |  {params}")
+        return 0
+
+    # walk-forward
+    wf = walk_forward(config, data5, data1h)
+    print(f"\n=== Walk-forward (metric={metric}) ===")
+    for i, f in enumerate(wf.folds, 1):
+        params = ", ".join(f"{k}={v}" for k, v in sorted(f.best_overrides.items()))
+        print(f"  fold {i}: test {f.test_range[0].date()}..{f.test_range[1].date()}  "
+              f"OOS return={f.oos_stats['total_return_pct']:>7.2f}%  "
+              f"trades={f.oos_stats['trades']:>3}  |  {params}")
+    a = wf.aggregate
+    if a.get("folds"):
+        print(f"\n  aggregate OOS: folds={a['folds']}  "
+              f"compounded={a['oos_compounded_return_pct']:.2f}%  "
+              f"trades={a['oos_trades']}  win={a['oos_win_rate']:.1%}  "
+              f"worstDD={a['oos_worst_drawdown_pct']:.2f}%")
     return 0
 
 
@@ -319,6 +372,8 @@ def build_parser() -> argparse.ArgumentParser:
                    help="backtest: load OHLCV CSVs from this dir instead of downloading")
     p.add_argument("--report-dir", default=None,
                    help="backtest: write trades.csv, equity_curve.csv/.html, summary.json here")
+    p.add_argument("--optimize", default=None, choices=["grid", "walkforward"],
+                   help="backtest: run grid search / walk-forward over optimize.grid")
     p.add_argument("--log-level", default="INFO")
     return p
 
@@ -331,6 +386,8 @@ def main(argv=None) -> int:
     )
     config = load_config(args.config, mode=args.mode)
     if config.mode is Mode.backtest:
+        if args.optimize:
+            return run_optimize(config, args.data_dir, args.optimize)
         return run_backtest(config, args.data_dir, args.report_dir)
     return run_live(config)
 

@@ -24,6 +24,7 @@ SQLite logging, pytest, Telegram alerts.
 | CLI entrypoint | `momentum_scalp/main.py` | ✅ done |
 | Backtest engine | `momentum_scalp/backtester.py` | ✅ done |
 | Reporting (CSV + equity chart) | `momentum_scalp/reporting.py` | ✅ done |
+| Optimizer (grid + walk-forward) | `momentum_scalp/optimizer.py` | ✅ done |
 
 ## Install (macOS)
 
@@ -74,6 +75,10 @@ python -m momentum_scalp.main --mode backtest --data-dir ./data/hist \
        --report-dir ./results
 #    open ./results/equity_curve.html in a browser (self-contained SVG, no deps)
 
+# Parameter optimization (search space in config.yaml -> optimize.grid)
+python -m momentum_scalp.main --mode backtest --data-dir ./data/hist --optimize grid
+python -m momentum_scalp.main --mode backtest --data-dir ./data/hist --optimize walkforward
+
 # 2) Paper — live market data, virtual balance, NO real orders
 python -m momentum_scalp.main --mode paper
 
@@ -115,6 +120,18 @@ streaming), `SignalEngine` (every entry gate + stop/target math) and the
   runner; stop fill → close). The runner's trailing stop is ratcheted per
   closed bar and re-placed via cancel+replace. The Watchdog kill-switch
   flattens everything if the feed goes silent with a position open.
+
+## Optimization
+
+`optimize.grid` in `config.yaml` maps dotted config paths to candidate values
+(e.g. `strategy.adx_min: [20, 23, 26]`). `--optimize grid` backtests every
+combination and ranks by `optimize.metric` (`max_drawdown_pct` is minimized, any
+other metric maximized). `--optimize walkforward` rolls a `(train, test)`
+window: it grid-searches each in-sample train slice, then evaluates the single
+winner on the following **out-of-sample** test slice — the engine's `trade_from`
+guard warms indicators on a prefix without letting those bars count as trades —
+and chains the OOS folds into a compounded return, the honest generalization
+measure.
 
 ## Backtest note
 
