@@ -259,6 +259,17 @@ class PositionManager:
     def on_price(self, symbol: str, price: float, atr: float) -> List[PositionAction]:
         return self.on_bar(symbol, price, price, atr)
 
+    def force_close(self, symbol: str, price: float, reason: str) -> Optional[PositionAction]:
+        """Flatten a position immediately at ``price`` (e.g. the weekly-limit
+        'close everything' rule). Returns the close action, or None if flat."""
+        tp = self.positions.get(symbol)
+        if tp is None or tp.closed:
+            return None
+        action = tp._close_remaining(price, reason)
+        self._persist(tp)
+        self.positions.pop(symbol, None)
+        return action
+
     def _persist(self, tp: TrackedPosition) -> None:
         if tp.closed:
             self.db.close_position(

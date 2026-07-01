@@ -21,7 +21,8 @@ SQLite logging, pytest, Telegram alerts.
 | PositionTracker (reconcile) | `momentum_scalp/position_tracker.py` | ✅ done |
 | Watchdog (kill-switch/TG) | `momentum_scalp/watchdog.py` | ✅ done |
 | Logger/DB (SQLite) | `momentum_scalp/db.py` | ✅ done |
-| CLI entrypoint | `momentum_scalp/main.py` | ⏳ stub |
+| CLI entrypoint | `momentum_scalp/main.py` | ✅ done |
+| Backtest engine | `momentum_scalp/backtester.py` | ✅ done |
 
 ## Install (macOS)
 
@@ -64,6 +65,9 @@ All modes are selected with `--mode`; strategy/risk parameters come from
 ```bash
 # 1) Backtest — historical OHLCV (downloaded via ccxt), virtual fills
 python -m momentum_scalp.main --mode backtest
+#    ...or fully offline from local CSVs named <SYMBOL>_<tf>.csv
+#    (e.g. BTCUSDT_5m.csv, BTCUSDT_1h.csv) with a timestamp column:
+python -m momentum_scalp.main --mode backtest --data-dir ./data/hist
 
 # 2) Paper — live market data, virtual balance, NO real orders
 python -m momentum_scalp.main --mode paper
@@ -88,8 +92,19 @@ consecutive-stop pause, cluster/position caps), `Config` validation,
 `Indicators` (EMA/SMA/RSI/ATR/ADX/Donchian + bias/entry feature bundles) and
 `DataFeed` helpers (OHLCV framing, gap detection, paginated history, closed-bar
 streaming), `SignalEngine` (every entry gate + stop/target math) and the
-`Database` (order idempotency, position lifecycle, equity/events) and the
-`PositionTracker` (TP1/TP2/runner ladder, stop-outs, restart reconcile).
+`Database` (order idempotency, position lifecycle, equity/events),
+`PositionTracker` (TP1/TP2/runner ladder, stop-outs, restart reconcile),
+`Executor` (simulated + live fills, idempotency, retry), `Watchdog`
+(kill-switch, notifiers), the `BacktestEngine` (end-to-end run + stats) and the
+`main` CLI (CSV loading, backtest dispatch, live safety lock). **112 tests.**
+
+## Backtest note
+
+Funding-rate history is not replayed in backtest, so the `|funding| < 0.05%`
+gate is treated as passing there; it is fully enforced in paper/testnet/live
+(fetched live per bar). Backtest fills are simulated at the bar close with the
+configured `fee_rate` and `slippage_pct`, and bars from all symbols share one
+global timeline so cross-symbol risk limits apply exactly as they would live.
 
 ## Strategy summary
 
