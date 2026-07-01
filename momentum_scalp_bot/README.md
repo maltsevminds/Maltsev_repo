@@ -17,7 +17,7 @@ SQLite logging, pytest, Telegram alerts.
 | DataFeed (ccxt.pro WS) | `momentum_scalp/data_feed.py` | ✅ done |
 | Indicators | `momentum_scalp/indicators.py` | ✅ done |
 | SignalEngine | `momentum_scalp/signal_engine.py` | ✅ done |
-| Executor (idempotent+retry) | `momentum_scalp/executor.py` | ⏳ stub |
+| Executor (idempotent+retry) | `momentum_scalp/executor.py` | ✅ done |
 | PositionTracker (reconcile) | `momentum_scalp/position_tracker.py` | ✅ done |
 | Watchdog (kill-switch/TG) | `momentum_scalp/watchdog.py` | ⏳ stub |
 | Logger/DB (SQLite) | `momentum_scalp/db.py` | ✅ done |
