@@ -16,7 +16,7 @@ SQLite logging, pytest, Telegram alerts.
 | RiskManager (sizing + gate) | `momentum_scalp/risk_manager.py` | ✅ done |
 | DataFeed (ccxt.pro WS) | `momentum_scalp/data_feed.py` | ✅ done |
 | Indicators | `momentum_scalp/indicators.py` | ✅ done |
-| SignalEngine | `momentum_scalp/signal_engine.py` | ⏳ stub |
+| SignalEngine | `momentum_scalp/signal_engine.py` | ✅ done |
 | Executor (idempotent+retry) | `momentum_scalp/executor.py` | ⏳ stub |
 | PositionTracker (reconcile) | `momentum_scalp/position_tracker.py` | ⏳ stub |
 | Watchdog (kill-switch/TG) | `momentum_scalp/watchdog.py` | ⏳ stub |
@@ -87,7 +87,7 @@ Current coverage: `RiskManager` (sizing, leverage cap, daily/weekly limits,
 consecutive-stop pause, cluster/position caps), `Config` validation,
 `Indicators` (EMA/SMA/RSI/ATR/ADX/Donchian + bias/entry feature bundles) and
 `DataFeed` helpers (OHLCV framing, gap detection, paginated history, closed-bar
-streaming).
+streaming) and `SignalEngine` (every entry gate + stop/target math).
 
 ## Strategy summary
 
