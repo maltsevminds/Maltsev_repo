@@ -50,6 +50,25 @@ def test_backtest_via_cli_with_csv(tmp_path):
     assert rc == 0  # runs to completion (0 trades on this flat data is fine)
 
 
+def test_backtest_report_dir_writes_files(tmp_path):
+    cfg_path = tmp_path / "config.yaml"
+    cfg_path.write_text(
+        "symbols: [BTC/USDT]\n"
+        "strategy: {ema_bias_period: 20}\n"
+        "backtest: {initial_equity: 10000}\n"
+    )
+    _write_csv(tmp_path / "BTCUSDT_5m.csv", 300, "5min")
+    _write_csv(tmp_path / "BTCUSDT_1h.csv", 60, "1h", start="2023-12-20")
+    report = tmp_path / "report"
+    rc = cli.main(["--mode", "backtest", "--config", str(cfg_path),
+                   "--data-dir", str(tmp_path), "--report-dir", str(report),
+                   "--log-level", "WARNING"])
+    assert rc == 0
+    assert (report / "equity_curve.html").exists()
+    assert (report / "trades.csv").exists()
+    assert (report / "summary.json").exists()
+
+
 def test_backtest_missing_data_returns_error(tmp_path):
     cfg_path = tmp_path / "config.yaml"
     cfg_path.write_text("symbols: [BTC/USDT]\n")

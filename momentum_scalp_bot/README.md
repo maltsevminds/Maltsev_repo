@@ -23,6 +23,7 @@ SQLite logging, pytest, Telegram alerts.
 | Logger/DB (SQLite) | `momentum_scalp/db.py` | ✅ done |
 | CLI entrypoint | `momentum_scalp/main.py` | ✅ done |
 | Backtest engine | `momentum_scalp/backtester.py` | ✅ done |
+| Reporting (CSV + equity chart) | `momentum_scalp/reporting.py` | ✅ done |
 
 ## Install (macOS)
 
@@ -68,6 +69,10 @@ python -m momentum_scalp.main --mode backtest
 #    ...or fully offline from local CSVs named <SYMBOL>_<tf>.csv
 #    (e.g. BTCUSDT_5m.csv, BTCUSDT_1h.csv) with a timestamp column:
 python -m momentum_scalp.main --mode backtest --data-dir ./data/hist
+#    ...and write a report (trades.csv, equity_curve.csv/.html, summary.json):
+python -m momentum_scalp.main --mode backtest --data-dir ./data/hist \
+       --report-dir ./results
+#    open ./results/equity_curve.html in a browser (self-contained SVG, no deps)
 
 # 2) Paper — live market data, virtual balance, NO real orders
 python -m momentum_scalp.main --mode paper

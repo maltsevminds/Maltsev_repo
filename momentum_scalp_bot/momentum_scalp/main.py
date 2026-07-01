@@ -101,7 +101,7 @@ async def download_window(config: Config, timeframe: str) -> Dict[str, pd.DataFr
 # --------------------------------------------------------------------------- #
 # Backtest
 # --------------------------------------------------------------------------- #
-def run_backtest(config: Config, data_dir: Optional[str]) -> int:
+def run_backtest(config: Config, data_dir: Optional[str], report_dir: Optional[str] = None) -> int:
     tf5, tf1h = config.timeframes.entry, config.timeframes.bias
     if data_dir:
         data5 = load_from_dir(data_dir, config.symbols, tf5)
@@ -123,6 +123,15 @@ def run_backtest(config: Config, data_dir: Optional[str]) -> int:
     print(f"symbols : {', '.join(symbols)}")
     print(f"window  : {config.backtest.start} -> {config.backtest.end}")
     print(result.summary())
+
+    if report_dir:
+        from .reporting import write_reports
+
+        meta = {"symbols": symbols, "start": config.backtest.start, "end": config.backtest.end}
+        paths = write_reports(result, report_dir, meta)
+        print("\nreports written:")
+        for name, p in paths.items():
+            print(f"  {name:10s} {p}")
     return 0
 
 
@@ -308,6 +317,8 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--config", default="config.yaml")
     p.add_argument("--data-dir", default=None,
                    help="backtest: load OHLCV CSVs from this dir instead of downloading")
+    p.add_argument("--report-dir", default=None,
+                   help="backtest: write trades.csv, equity_curve.csv/.html, summary.json here")
     p.add_argument("--log-level", default="INFO")
     return p
 
@@ -320,7 +331,7 @@ def main(argv=None) -> int:
     )
     config = load_config(args.config, mode=args.mode)
     if config.mode is Mode.backtest:
-        return run_backtest(config, args.data_dir)
+        return run_backtest(config, args.data_dir, args.report_dir)
     return run_live(config)
 
 
