@@ -1,0 +1,95 @@
+# ===========================================================================
+# Momentum-Scalp bot — configuration
+# Every strategy / risk parameter lives here. Nothing is hard-coded in modules.
+# ===========================================================================
+
+# Run mode is normally passed on the CLI (--mode). This is the fallback default.
+mode: backtest
+
+# HARD SAFETY LOCK. Live trading is refused unless this is true AND --mode live.
+# Progression is always backtest -> paper -> testnet -> (only then) live.
+confirm_live: false
+
+exchange:
+  id: binanceusdm          # ccxt exchange id for Binance USDⓈ-M futures
+  testnet: true            # ignored except in `testnet` mode
+  # Env var NAMES that hold the keys (values live in .env, never here).
+  live_key_env: BINANCE_API_KEY
+  live_secret_env: BINANCE_API_SECRET
+  testnet_key_env: BINANCE_TESTNET_API_KEY
+  testnet_secret_env: BINANCE_TESTNET_API_SECRET
+
+symbols:
+  - BTC/USDT
+  - ETH/USDT
+  - SOL/USDT
+  - BNB/USDT
+  - XRP/USDT
+  - DOGE/USDT
+
+timeframes:
+  bias: 1h                 # trend bias timeframe
+  entry: 5m                # entry / execution timeframe
+
+leverage_cap: 20           # never exceed this, regardless of sizing math
+
+strategy:
+  ema_bias_period: 200     # 1h close vs EMA200 -> long only above, short below
+  donchian_period: 20      # 5m breakout channel
+  volume_sma_period: 20
+  volume_mult: 1.5         # entry volume must exceed 1.5x SMA20
+  adx_period: 14
+  adx_min: 23              # ADX(14) > 23
+  rsi_period: 14
+  rsi_long: [58, 78]       # long allowed only when RSI in this band
+  rsi_short: [22, 42]      # short allowed only when RSI in this band
+  funding_max: 0.0005      # |funding rate| must be < 0.05%
+  atr_period: 14
+  atr_stop_mult: 1.2       # stop = entry -/+ 1.2 * ATR(14, 5m)
+
+targets:
+  tp1_r: 1.0               # TP1 at +1R
+  tp1_close_pct: 0.5       # close 50% at TP1
+  move_stop_to_be_after_tp1: true
+  tp2_r: 2.0               # TP2 at +2R
+  tp2_close_pct: 0.3       # close 30% at TP2
+  runner_pct: 0.2          # remaining 20% runs
+  runner_trail_atr_mult: 1.5  # runner trails by 1.5 * ATR
+
+risk:
+  risk_per_trade: 0.015    # 1.5% of equity risked per trade
+  reduced_risk_per_trade: 0.01  # cut to 1% when weekly drawdown > weekly_drawdown_reduce
+  daily_loss_limit: 0.05   # -5% realized on the day -> halt until next UTC day
+  weekly_loss_limit: 0.14  # -14% realized on the week -> flat + off until Monday
+  weekly_drawdown_reduce: 0.07  # >7% weekly drawdown -> risk cut to reduced_risk_per_trade
+  max_positions: 3
+  consecutive_stops_pause: 2   # N stops in a row ...
+  pause_minutes: 90            # ... -> pause new entries this long
+  no_averaging_down: true      # never add to a losing position
+  clusters:                    # correlation clusters: cap concurrent positions
+    majors:
+      symbols: [BTC/USDT, ETH/USDT, SOL/USDT]
+      max: 2
+
+database:
+  path: data/bot.sqlite
+
+telegram:
+  enabled: false
+  bot_token_env: TELEGRAM_BOT_TOKEN
+  chat_id_env: TELEGRAM_CHAT_ID
+
+watchdog:
+  ws_timeout_seconds: 30       # kill-switch: lost feed > this with open position
+  reconnect_max_retries: 10
+  reconnect_backoff_seconds: 2 # exponential base
+
+backtest:
+  start: "2024-01-01"
+  end: "2024-06-01"
+  initial_equity: 10000
+  fee_rate: 0.0004             # taker fee (0.04%)
+  slippage_pct: 0.0002
+
+paper:
+  initial_equity: 10000
