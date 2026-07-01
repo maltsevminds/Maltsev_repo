@@ -19,7 +19,7 @@ SQLite logging, pytest, Telegram alerts.
 | SignalEngine | `momentum_scalp/signal_engine.py` | ✅ done |
 | Executor (idempotent+retry) | `momentum_scalp/executor.py` | ✅ done |
 | PositionTracker (reconcile) | `momentum_scalp/position_tracker.py` | ✅ done |
-| Watchdog (kill-switch/TG) | `momentum_scalp/watchdog.py` | ⏳ stub |
+| Watchdog (kill-switch/TG) | `momentum_scalp/watchdog.py` | ✅ done |
 | Logger/DB (SQLite) | `momentum_scalp/db.py` | ✅ done |
 | CLI entrypoint | `momentum_scalp/main.py` | ⏳ stub |
 
