@@ -1,8 +1,10 @@
 # Core
-ccxt>=4.3.0            # REST + ccxt.pro WebSocket (unified in ccxt>=4)
+ccxt>=4.5.0           # REST + ccxt.pro WebSocket (unified in ccxt>=4)
 pandas>=2.2.0
 numpy>=1.26.0
-pandas-ta>=0.3.14b0   # technical indicators
+# Indicators are implemented natively in momentum_scalp/indicators.py
+# (pure pandas/numpy). pandas-ta is intentionally NOT a dependency: it is
+# unavailable on Python 3.11 and broken against numpy 2.x.
 
 # Config / validation
 pydantic>=2.6.0

@@ -14,8 +14,8 @@ SQLite logging, pytest, Telegram alerts.
 | --- | --- | --- |
 | Config (pydantic + YAML) | `momentum_scalp/config.py` | ✅ done |
 | RiskManager (sizing + gate) | `momentum_scalp/risk_manager.py` | ✅ done |
-| DataFeed (ccxt.pro WS) | `momentum_scalp/data_feed.py` | ⏳ stub |
-| Indicators | `momentum_scalp/indicators.py` | ⏳ stub |
+| DataFeed (ccxt.pro WS) | `momentum_scalp/data_feed.py` | ✅ done |
+| Indicators | `momentum_scalp/indicators.py` | ✅ done |
 | SignalEngine | `momentum_scalp/signal_engine.py` | ⏳ stub |
 | Executor (idempotent+retry) | `momentum_scalp/executor.py` | ⏳ stub |
 | PositionTracker (reconcile) | `momentum_scalp/position_tracker.py` | ⏳ stub |
@@ -84,7 +84,10 @@ pytest            # from momentum_scalp_bot/
 ```
 
 Current coverage: `RiskManager` (sizing, leverage cap, daily/weekly limits,
-consecutive-stop pause, cluster/position caps) and `Config` validation.
+consecutive-stop pause, cluster/position caps), `Config` validation,
+`Indicators` (EMA/SMA/RSI/ATR/ADX/Donchian + bias/entry feature bundles) and
+`DataFeed` helpers (OHLCV framing, gap detection, paginated history, closed-bar
+streaming).
 
 ## Strategy summary
 
